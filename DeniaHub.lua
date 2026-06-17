@@ -1075,6 +1075,8 @@ _modules["ui"] = function()
     UI.DragToggleKey = Enum.KeyCode.LeftShift
     UI.Visible = false
     UI.Minimized = false
+    UI.LoadingScreen = nil
+    UI.LoadingInstances = {}
     UI.Library = {
         Theme = {
             Base = Color3.fromRGB(27, 52, 34),
@@ -1434,10 +1436,30 @@ _modules["ui"] = function()
             Size=UDim2.new(1,0,0,34), BackgroundColor3=T.Theme.Theme, BorderSizePixel=0})
         AddCorner(headerBar, T.CardRadius)
         New("UIClip", {Parent=headerBar})
-        New("TextLabel", {Name="SectionTitle", Parent=headerBar, Size=UDim2.new(1,-20,1,0),
+        New("TextLabel", {Name="SectionTitle", Parent=headerBar, Size=UDim2.new(1,-50,1,0),
             Position=UDim2.new(0,14,0,0), BackgroundTransparency=1, Text=name,
             TextColor3=T.Theme.AccentLight, FontFace=T.FontBold, TextSize=16,
             TextXAlignment=Enum.TextXAlignment.Left})
+
+        local sectionCollapsed = false
+        local collapseBtn = New("TextButton", {Name="CollapseBtn", Parent=headerBar,
+            Size=UDim2.new(0,28,0,28), Position=UDim2.new(1,-36,0.5,-14),
+            BackgroundTransparency=1, Text="?",
+            TextColor3=T.Theme.Accent, FontFace=T.Font, TextSize=18, BorderSizePixel=0,
+            AutoButtonColor=false})
+        collapseBtn.MouseButton1Click:Connect(function()
+            sectionCollapsed = not sectionCollapsed
+            collapseBtn.Text = sectionCollapsed and "+" or "−"
+            local targetH = sectionCollapsed and 0 or (totalContentH > 0 and totalContentH or calcContentHeight())
+            tweenObject(sectionContent, {Size=UDim2.new(1,0,0,targetH)}, 0.25):Play()
+            if sectionCollapsed then
+                tweenObject(sectionContent, {BackgroundTransparency=0.5}, 0.2):Play()
+            else
+                tweenObject(sectionContent, {BackgroundTransparency=0}, 0.2):Play()
+            end
+            sectionContent.Visible = not sectionCollapsed
+            updateSize()
+        end)
 
         local sectionContent = New("Frame", {Name="SectionContent", Parent=sectionFrame,
             Size=UDim2.new(1,0,0,0), Position=UDim2.new(0,0,0,36), BackgroundTransparency=1})
@@ -1448,12 +1470,26 @@ _modules["ui"] = function()
 
         local sectionData={Frame=sectionFrame, Header=headerBar, Content=sectionContent,
             Layout=sectionLayout, Elements={}}
-        local function updateSize()
-            local totalHeight=38
+        local totalContentH = 0
+        local function calcContentHeight()
+            local h = 0
             for _,child in ipairs(sectionContent:GetChildren()) do
-                if child:IsA("GuiObject") and child.Visible then totalHeight=totalHeight+child.AbsoluteSize.Y+6 end end
-            sectionFrame.Size=UDim2.new(1,0,0,totalHeight)
+                if child:IsA("GuiObject") and child.Visible then h = h + child.AbsoluteSize.Y + 6 end
+            end
+            return h
         end
+        local function updateSize()
+            if sectionCollapsed then
+                sectionFrame.Size=UDim2.new(1,0,0,38)
+                return
+            end
+            local h = 38 + calcContentHeight()
+            sectionFrame.Size=UDim2.new(1,0,0,h)
+        end
+        local contentSizeConn = sectionLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+            totalContentH = sectionLayout.AbsoluteContentSize.Y
+            updateSize()
+        end)
         sectionContent.ChildAdded:Connect(function() updateSize() end)
         sectionContent.ChildRemoved:Connect(function() updateSize() end)
         sectionData.Update=updateSize
@@ -1503,6 +1539,7 @@ _modules["ui"] = function()
     function UI:Dropdown(tab, section, configKey, displayName, options, default, order)
         order=order or 1
         local selected=default or (options and options[1]) or "None"
+        local searchQuery = ""
         local row = New("Frame", {Name=displayName.."Dropdown", Parent=section.Content,
             Size=UDim2.new(1,0,0,66), BackgroundTransparency=1, LayoutOrder=order})
         New("TextLabel", {Name="Label", Parent=row, Size=UDim2.new(1,0,0,20),
@@ -1516,7 +1553,7 @@ _modules["ui"] = function()
         AddStroke(dropdownBtn, T.Theme.Border, 1, 0.6)
         New("TextLabel", {Name="Arrow", Parent=dropdownBtn, Size=UDim2.new(0,20,1,0),
             Position=UDim2.new(1,-24,0,0), BackgroundTransparency=1, Text="?",
-            TextColor3=T.Theme.Accent, FontFace=T.Font, TextSize=12,
+            TextColor3=T.Theme.Accent, FontFace=T.Font, TextSize=14,
             TextXAlignment=Enum.TextXAlignment.Center})
 
         local dropdownFrame = New("Frame", {Name="DropdownList", Parent=row,
@@ -1525,39 +1562,83 @@ _modules["ui"] = function()
             Visible=false, ZIndex=20})
         AddCorner(dropdownFrame, T.DropdownRadius)
         AddStroke(dropdownFrame, T.Theme.Border, 1, 0.5)
-        local listLayout = New("UIListLayout", {Parent=dropdownFrame, Padding=UDim.new(0,2),
+
+        local searchBox = New("TextBox", {Name="SearchBox", Parent=dropdownFrame,
+            Size=UDim2.new(1,-8,0,30), Position=UDim2.new(0,4,0,4),
+            BackgroundColor3=T.Theme.InputBg, Text="", TextColor3=T.Theme.TextBright,
+            PlaceholderText="Search...", PlaceholderColor3=T.Theme.TextDim,
+            FontFace=T.Font, TextSize=13, BorderSizePixel=0, ClearTextOnFocus=false,
+            ZIndex=21, Visible=false})
+        AddCorner(searchBox, T.BadgeRadius)
+        AddStroke(searchBox, T.Theme.Border, 1, 0.5)
+
+        local listScroll = New("ScrollingFrame", {Name="ListScroll", Parent=dropdownFrame,
+            Size=UDim2.new(1,-8,0,0), Position=UDim2.new(0,4,0,38),
+            BackgroundTransparency=1, ScrollBarThickness=3, BorderSizePixel=0,
+            ScrollBarImageColor3=T.Theme.ScrollBar, CanvasSize=UDim2.new(0,0,0,0),
+            AutomaticCanvasSize=Enum.AutomaticSize.Y})
+        local listLayout = New("UIListLayout", {Parent=listScroll, Padding=UDim.new(0,2),
             SortOrder=Enum.SortOrder.LayoutOrder})
 
-        local function populateList()
-            for _,child in ipairs(dropdownFrame:GetChildren()) do if child:IsA("TextButton") then child:Destroy() end end
+        local function populateList(filter)
+            filter = filter or ""
+            for _,child in ipairs(listScroll:GetChildren()) do
+                if child:IsA("TextButton") then child:Destroy() end
+            end
+            local filtered = {}
             for _,opt in ipairs(options) do
-                local optBtn = New("TextButton", {Name=opt, Parent=dropdownFrame,
-                    Size=UDim2.new(1,-4,0,32), Position=UDim2.new(0,2,0,0),
+                if filter=="" or opt:lower():find(filter:lower(),1,true) then
+                    table.insert(filtered, opt)
+                end
+            end
+            for _,opt in ipairs(filtered) do
+                local optBtn = New("TextButton", {Name=opt, Parent=listScroll,
+                    Size=UDim2.new(1,0,0,30),
                     BackgroundColor3=(opt==selected) and T.Theme.DropdownHover or T.Theme.DropdownItem,
                     Text=opt, TextColor3=(opt==selected) and T.Theme.AccentLight or T.Theme.Text,
                     FontFace=T.Font, TextSize=13, BorderSizePixel=0, AutoButtonColor=false})
                 AddCorner(optBtn, T.BadgeRadius)
                 optBtn.MouseButton1Click:Connect(function()
-                    selected=opt; dropdownBtn.Text=opt; dropdownFrame.Visible=false
+                    selected=opt; dropdownBtn.Text=opt
+                    local wasVis=dropdownFrame.Visible
+                    dropdownFrame.Visible=false; searchBox.Visible=false
                     tweenObject(dropdownFrame,{Size=UDim2.new(1,0,0,0)},0.15):Play()
                     if getgenv()._DeniaConfig then
                         getgenv()._DeniaConfig[configKey]=opt
                         if getgenv()._DeniaConfig.saveSettings then getgenv()._DeniaConfig.saveSettings() end
                     end
-                    populateList()
+                    if wasVis then populateList(searchQuery) end
                 end)
                 optBtn.MouseEnter:Connect(function() tweenObject(optBtn,{BackgroundColor3=T.Theme.DropdownHover},0.1):Play() end)
                 optBtn.MouseLeave:Connect(function() tweenObject(optBtn,{BackgroundColor3=(opt==selected) and T.Theme.DropdownHover or T.Theme.DropdownItem},0.15):Play() end)
             end
-            local listHeight=math.min(#options*34,200)
-            dropdownFrame.Size=dropdownFrame.Visible and UDim2.new(1,0,0,listHeight) or UDim2.new(1,0,0,0)
+            local count = #filtered
+            local listHeight = math.min(count*32, 200)
+            listScroll.Size = UDim2.new(1,0,0,listHeight)
+            local totalH = 42 + listHeight
+            dropdownFrame.Size = dropdownFrame.Visible and UDim2.new(1,0,0,totalH) or UDim2.new(1,0,0,0)
         end
+
+        searchBox.FocusLost:Connect(function()
+            task.wait(0.1)
+        end)
+        searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+            searchQuery = searchBox.Text
+            populateList(searchQuery)
+        end)
 
         dropdownBtn.MouseButton1Click:Connect(function()
             local newVis=not dropdownFrame.Visible; dropdownFrame.Visible=newVis
-            if newVis then dropdownFrame.ZIndex=50; populateList()
-                tweenObject(dropdownFrame,{Size=UDim2.new(1,0,0,math.min(#options*34,200))},0.2):Play()
-            else tweenObject(dropdownFrame,{Size=UDim2.new(1,0,0,0)},0.15):Play() end
+            searchBox.Visible = newVis
+            if newVis then
+                dropdownFrame.ZIndex=50; searchBox.ZIndex=51
+                searchBox.Text = ""; searchQuery = ""
+                searchBox:CaptureFocus()
+                populateList("")
+            else
+                searchBox.Visible=false
+                tweenObject(dropdownFrame,{Size=UDim2.new(1,0,0,0)},0.15):Play()
+            end
         end)
 
         UserInputService.InputBegan:Connect(function(input)
@@ -1568,11 +1649,13 @@ _modules["ui"] = function()
                 local inRow=pos.X>=rowAbs.X and pos.X<=rowAbs.X+rowSize.X and pos.Y>=rowAbs.Y and pos.Y<=rowAbs.Y+rowSize.Y
                 local inDropdown=dropdownFrame.Visible and pos.X>=absPos.X and pos.X<=absPos.X+absSize.X and pos.Y>=absPos.Y and pos.Y<=absPos.Y+absSize.Y
                 if not inRow and not inDropdown and dropdownFrame.Visible then
-                    dropdownFrame.Visible=false; tweenObject(dropdownFrame,{Size=UDim2.new(1,0,0,0)},0.15):Play() end
+                    dropdownFrame.Visible=false; searchBox.Visible=false
+                    tweenObject(dropdownFrame,{Size=UDim2.new(1,0,0,0)},0.15):Play()
+                end
             end
         end)
 
-        row._setValue=function(val) selected=val; dropdownBtn.Text=val; populateList() end
+        row._setValue=function(val) selected=val; dropdownBtn.Text=val; populateList(searchQuery) end
         row._getValue=function() return selected end
         section.Update()
         return row
@@ -1767,6 +1850,105 @@ _modules["ui"] = function()
         end
     end
 
+    function UI:CreateLoadingScreen()
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "DeniaLoading"
+        sg.Parent = lp:WaitForChild("PlayerGui")
+        sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        sg.DisplayOrder = 9999
+        sg.IgnoreGuiInset = true
+        table.insert(UI.LoadingInstances, sg)
+
+        local bg = New("Frame", {Parent=sg, Size=UDim2.new(1,0,1,0),
+            BackgroundColor3=Color3.fromRGB(18,42,24), BorderSizePixel=0})
+        table.insert(UI.LoadingInstances, bg)
+
+        local container = New("Frame", {Parent=bg, Size=UDim2.new(0,420,0,340),
+            Position=UDim2.new(0.5,-210,0.5,-170), BackgroundColor3=T.Theme.Surface,
+            BorderSizePixel=0, ClipsDescendants=true})
+        AddCorner(container, UDim.new(0,18))
+        AddStroke(container, T.Theme.Accent, 1.5, 0.3)
+        table.insert(UI.LoadingInstances, container)
+
+        local logo = New("TextLabel", {Parent=container, Size=UDim2.new(1,0,0,60),
+            Position=UDim2.new(0,0,0,40), BackgroundTransparency=1,
+            Text="DeniaHub", TextColor3=T.Theme.AccentLight,
+            FontFace=T.FontBold, TextSize=42, TextXAlignment=Enum.TextXAlignment.Center})
+        table.insert(UI.LoadingInstances, logo)
+
+        local subText = New("TextLabel", {Parent=container, Size=UDim2.new(1,0,0,24),
+            Position=UDim2.new(0,0,0,100), BackgroundTransparency=1,
+            Text="Blox Fruits Script v3.0", TextColor3=T.Theme.TextDim,
+            FontFace=T.Font, TextSize=16, TextXAlignment=Enum.TextXAlignment.Center})
+        table.insert(UI.LoadingInstances, subText)
+
+        local barBg = New("Frame", {Parent=container, Size=UDim2.new(0,320,0,10),
+            Position=UDim2.new(0.5,-160,0,180), BackgroundColor3=T.Theme.SliderRail,
+            BorderSizePixel=0})
+        AddCorner(barBg, UDim.new(0,5))
+        table.insert(UI.LoadingInstances, barBg)
+
+        local barFill = New("Frame", {Parent=barBg, Size=UDim2.new(0,0,1,0),
+            BackgroundColor3=T.Theme.Accent, BorderSizePixel=0})
+        AddCorner(barFill, UDim.new(0,5))
+        UI.LoadingBar = barFill
+        table.insert(UI.LoadingInstances, barFill)
+
+        local statusText = New("TextLabel", {Parent=container, Size=UDim2.new(1,0,0,20),
+            Position=UDim2.new(0,0,0,210), BackgroundTransparency=1,
+            Text="Initializing...", TextColor3=T.Theme.Text,
+            FontFace=T.Font, TextSize=13, TextXAlignment=Enum.TextXAlignment.Center})
+        UI.LoadingStatus = statusText
+        table.insert(UI.LoadingInstances, statusText)
+
+        local pulse = New("Frame", {Parent=container, Size=UDim2.new(0,16,0,16),
+            Position=UDim2.new(0.5,-8,0,250), BackgroundColor3=T.Theme.Accent,
+            BorderSizePixel=0})
+        AddCorner(pulse, UDim.new(1,0))
+        table.insert(UI.LoadingInstances, pulse)
+        TweenService:Create(pulse, TweenInfo.new(1.2, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1), {
+            ImageTransparency=0.8, Size=UDim2.new(0,24,0,24), Position=UDim2.new(0.5,-12,0,246)
+        }):Play()
+
+        local dots = {""}
+        local dotConn
+        dotConn = RunService.Heartbeat:Connect(function()
+            if not statusText or not statusText.Parent then if dotConn then dotConn:Disconnect() end return end
+            local txt = statusText.Text
+            local base = txt:match("^(.-)%.*$") or txt:match("^(.-)%.*%.*$") or txt:gsub("%.+$","")
+            dots[1] = (#dots[1] >= 3) and "" or dots[1].."."
+            statusText.Text = base..dots[1]
+        end)
+        table.insert(cleanupFuncs, dotConn)
+
+        UI.LoadingScreen = container
+        return container
+    end
+
+    function UI:UpdateLoadingProgress(text, progress)
+        if UI.LoadingBar then
+            tweenObject(UI.LoadingBar, {Size=UDim2.new(progress,0,1,0)}, 0.3):Play()
+        end
+        if UI.LoadingStatus then
+            UI.LoadingStatus.Text = text or "Loading..."
+        end
+    end
+
+    function UI:HideLoadingScreen()
+        if UI.LoadingScreen then
+            tweenObject(UI.LoadingScreen.Parent, {BackgroundTransparency=1}, 0.4, Enum.EasingStyle.Quart):Play()
+            tweenObject(UI.LoadingScreen, {BackgroundTransparency=0.5, Size=UDim2.new(0,380,0,300)}, 0.4, Enum.EasingStyle.Quart):Play()
+            task.wait(0.5)
+            for _, inst in ipairs(UI.LoadingInstances) do
+                pcall(function() inst:Destroy() end)
+            end
+            UI.LoadingInstances = {}
+            UI.LoadingScreen = nil
+            UI.LoadingBar = nil
+            UI.LoadingStatus = nil
+        end
+    end
+
     function UI:Init()
         self:CreateMain()
         local statsConn = RunService.Heartbeat:Connect(function()
@@ -1795,676 +1977,1275 @@ _modules["main"] = function()
     local Main = {}
     local Players = game:GetService("Players")
     local RunService = game:GetService("RunService")
-    local UserInputService = game:GetService("UserInputService")
+    local UIS = game:GetService("UserInputService")
     local TweenService = game:GetService("TweenService")
     local HttpService = game:GetService("HttpService")
     local TeleportService = game:GetService("TeleportService")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local VirtualInputManager = game:GetService("VirtualInputManager")
     local Workspace = game:GetService("Workspace")
+    local CoreGui = game:GetService("CoreGui")
     local lp = Players.LocalPlayer
     local Config = getgenv()._DeniaConfig
     local Utils = getgenv()._DeniaUtils
     local UI = getgenv()._DeniaUI
 
-    Main.Running = false
-    Main.Paused = false
-    Main.CurrentTarget = nil
-    Main.FarmMode = "Bounty"
-    Main.LoopConnections = {}
-    Main.AttackCooldown = {}
-    Main.SkillCooldowns = {}
-    Main.LastAttackTime = 0
-    Main.TargetScanInterval = 1
-    Main.LastTargetScan = 0
-    Main.BringConnection = nil
-    Main.CurrentBotTarget = nil
-    Main._targetPlayers = {}
-    Main._currentLock = nil
-    Main._bountyCache = {}
-    Main._lastBountyValue = 0
-    Main._combatCooldown = 0
+    Main.Running = false; Main.Paused = false
+    Main.CurrentTargetPlayer = nil
+    Main._instaTpConnection = nil
+    Main._antiSeatConnection = nil; Main._antiSeatConnection2 = nil
+    Main._lastBusoTime = 0; Main._lastKenTime = 0; Main._lastV4Time = 0
+    Main._lastPvPTime = 0; Main._lastDragonCheck = 0; Main._hopping = false
+    Main._prevBounty = 0; Main._sessionKills = 0; Main._sessionBounty = 0
+    Main._playerPosHistory = {}; Main._deathConnected = false
+    Main.LoopConnections = {}; Main.SkillCooldowns = {}
 
-    local COMBAT_COOLDOWN = 0.3
-    local SKILL_COOLDOWN = 1.5
-    local SCAN_INTERVAL = 0.5
-    local BRING_RADIUS = 280
-    local ATTACK_RANGE = 120
+    local MIN_PLAYER_LEVEL = 2300; local PREDICTION_TIME = 0.25; local Y_OFFSET = 1
+    local FRUIT_ATTACK_RANGE = 100; local LOW_HEALTH = 5000; local SAFE_HEALTH = 9000
+    local ESCAPE_HEIGHT = 273861; local PREDICTION_SAMPLES = 3
+    local BUSO_INT = 5; local KEN_INT = 8; local PVP_INT = 15
 
-    function Main.getCharacter()
-        local char = lp.Character
-        if not char or not char:FindFirstChild("HumanoidRootPart") then
-            char = lp.CharacterAdded:Wait()
-        end
-        return char
+    local FruitConfigs = {
+        Dragon={T="Dragon-Dragon",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        ["T-Rex"]={T="T-Rex-T-Rex",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),3}end},
+        Kitsune={T="Kitsune-Kitsune",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Flame={T="Flame-Flame",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Ice={T="Ice-Ice",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Dark={T="Dark-Dark",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Light={T="Light-Light",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Magma={T="Magma-Magma",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Buddha={T="Buddha-Buddha",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Portal={T="Portal-Portal",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Dough={T="Dough-Dough",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Venom={T="Venom-Venom",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Leopard={T="Leopard-Leopard",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Mammoth={T="Mammoth-Mammoth",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Yeti={T="Yeti-Yeti",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Gas={T="Gas-Gas",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+        Kitsune={T="Kitsune-Kitsune",R="LeftClickRemote",A=function(d)return{Vector3.new(d.X,d.Y,d.Z),1}end},
+    }
+
+    function Main.gC()
+        local c=lp.Character
+        if not c or not c:FindFirstChild("HumanoidRootPart") then local ok,cc=pcall(function()return lp.CharacterAdded:Wait(5)end); if ok and cc then c=cc end end
+        return c
     end
+    function Main.hrp()local c=Main.gC();return c and c:FindFirstChild("HumanoidRootPart")end
+    function Main.hum()local c=Main.gC();return c and(c:FindFirstChild("Humanoid")or c:FindFirstChild("HumanoidOfLocal"))end
+    function Main.pos()local h=Main.hrp();return h and h.Position or Vector3.new(0,0,0)end
+    function Main.tp(cf)local h=Main.hrp();if h then h.CFrame=cf end end
+    function Main.dist(p)return(Main.pos()-p).Magnitude end
 
-    function Main.getHRP()
-        local char = Main.getCharacter()
-        return char and char:FindFirstChild("HumanoidRootPart")
-    end
-
-    function Main.getHumanoid()
-        local char = Main.getCharacter()
-        return char and char:FindFirstChild("HumanoidOfLocal")
-    end
-
-    function Main.getRootPos()
-        local hrp = Main.getHRP()
-        return hrp and hrp.Position or Vector3.new(0,0,0)
-    end
-
-    function Main.teleportToCFrame(cf)
-        local hrp = Main.getHRP()
-        if hrp then hrp.CFrame = cf end
-    end
-
-    function Main.teleportToPosition(pos)
-        Main.teleportToCFrame(CFrame.new(pos))
-    end
-
-    function Main.getDistanceFromChar(targetPos)
-        return (Main.getRootPos() - targetPos).Magnitude
-    end
-
-    function Main.getPlayerBounty(player)
-        local ls = player:FindFirstChild("leaderstats")
-        if ls then
-            local bh = ls:FindFirstChild("Bounty/Honor")
-            if bh then return tonumber(bh.Value) or 0 end
-        end
+    function Main.bounty(p)
+        local ls=p:FindFirstChild("leaderstats")
+        if ls then local b=ls:FindFirstChild("Bounty/Honor");if b then return tonumber(b.Value)or 0 end end
         return 0
     end
 
-    function Main.getPlayerLevel(player)
-        local data = player:FindFirstChild("Data")
-        if data then
-            local lv = data:FindFirstChild("Level")
-            if lv then return tonumber(lv.Value) or 0 end
-        end
+    function Main.lvl(p)
+        local d=p:FindFirstChild("Data")
+        if d then local l=d:FindFirstChild("Level");if l then return tonumber(l.Value)or 0 end end
         return 0
     end
 
-    function Main.getPlayerHealth(player)
-        local char = player.Character
-        if char then
-            local hum = char:FindFirstChild("Humanoid")
-            if hum then return hum.Health, hum.MaxHealth end
-        end
-        return 0, 100
+    function Main.hp(p)
+        local c=p.Character
+        if c then local h=c:FindFirstChild("Humanoid");if h then return h.Health,h.MaxHealth end end
+        return 0,100
     end
 
-    function Main.isPlayerInRange(player, range)
-        local char = player.Character
-        if char and char:FindFirstChild("HumanoidRootPart") then
-            return Main.getDistanceFromChar(char.HumanoidRootPart.Position) <= (range or ATTACK_RANGE)
+    function Main.safeZone(p)
+        if not p or not p.Character then return false end
+        local h=p.Character:FindFirstChild("HumanoidRootPart")if not h then return false end
+        local wz=Workspace:FindFirstChild("_WorldOrigin")if not wz then return false end
+        local sz=wz:FindFirstChild("SafeZones")if not sz then return false end
+        for _,z in pairs(sz:GetChildren())do
+            local m=z:FindFirstChild("Mesh")
+            if m and m:IsA("SpecialMesh")then
+                local r=(z.Size.X*m.Scale.X)/2
+                if(z.Position-h.Position).Magnitude<=r then return true end
+            end
         end
         return false
     end
 
-    function Main.getClosestPlayer()
-        local closest = nil; local closestDist = math.huge
-        local myPos = Main.getRootPos()
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player ~= lp and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-                local dist = (myPos - player.Character.HumanoidRootPart.Position).Magnitude
-                if dist < closestDist then closestDist = dist; closest = player end
-            end
-        end
-        return closest, closestDist
+    function Main.valid(p)
+        if p==lp then return false end
+        if not p.Character then return false end
+        local h=p.Character:FindFirstChild("Humanoid")if not h or h.Health<=0 then return false end
+        if not p.Character:FindFirstChild("HumanoidRootPart")then return false end
+        if Main.lvl(p)<MIN_PLAYER_LEVEL then return false end
+        if Main.safeZone(p)then return false end
+        if p:GetAttribute("PvpDisabled")==true then return false end
+        if p:GetAttribute("IslandRaiding")==true then return false end
+        return true
     end
 
-    function Main.getTargetPlayers()
-        local targets = {}
-        local config = Config
-        local isWhitelist = config.WHITELIST_MODE == "Whitelist"
-        local buddyList = config.BUDDY_LIST or {}
-        local teamCheck = config.TEAM_CHECK
+    function Main.getTargets()
+        local v={}
+        for _,p in pairs(Players:GetPlayers())do
+            if Main.valid(p)then
+                local n=p.Name:lower();local matched=false
+                if Config.WHITELIST_MODE=="Whitelist"then
+                    for _,bn in ipairs(Config.BUDDY_LIST or {})do if n==bn:lower()then matched=true;break end end
+                    if matched then table.insert(v,p)end
+                else
+                    for _,bn in ipairs(Config.BUDDY_LIST or {})do if n==bn:lower()then matched=true;break end end
+                    if not matched then table.insert(v,p)end
+                end
+            end
+        end
+        return v
+    end
 
-        local myTeam = ""
+    function Main.PvP()pcall(function()ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("CommF_"):InvokeServer("EnablePvp")end)end
+
+    function Main.Buso()
+        local n=tick()
         pcall(function()
-            local data = lp:FindFirstChild("Data")
-            if data then
-                local faction = data:FindFirstChild("Faction")
-                if faction then myTeam = tostring(faction.Value) end
+            if n-Main._lastKenTime>=KEN_INT then ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("CommE"):FireServer("Ken",true);Main._lastKenTime=n end
+            if n-Main._lastBusoTime>=BUSO_INT then
+                local c=Main.gC()
+                if c and not c:FindFirstChild("HasBuso")then ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("CommF_"):InvokeServer("Buso")end
+                Main._lastBusoTime=n
             end
         end)
-
-        local myLevel = Main.getPlayerLevel(lp)
-
-        for _, player in ipairs(Players:GetPlayers()) do
-            if player == lp then goto continue end
-            if not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then goto continue end
-            if not player.Character:FindFirstChild("Humanoid") then goto continue end
-            local hum = player.Character.Humanoid
-            if hum.Health <= 0 then goto continue end
-
-            local playerName = player.Name:lower()
-            if isWhitelist then
-                local matched = false
-                for _, buddyName in ipairs(buddyList) do
-                    if playerName == buddyName:lower() then matched = true; break end
-                end
-                if not matched then goto continue end
-            else
-                local blocked = false
-                for _, buddyName in ipairs(buddyList) do
-                    if playerName == buddyName:lower() then blocked = true; break end
-                end
-                if blocked then goto continue end
-            end
-
-            if teamCheck then
-                local theirTeam = ""
-                pcall(function()
-                    local data = player:FindFirstChild("Data")
-                    if data then
-                        local faction = data:FindFirstChild("Faction")
-                        if faction then theirTeam = tostring(faction.Value) end
-                    end
-                end)
-                if myTeam ~= "" and myTeam == theirTeam then goto continue end
-            end
-
-            table.insert(targets, player)
-            ::continue::
-        end
-        return targets
     end
 
-    function Main.selectTarget()
-        local targets = Main.getTargetPlayers()
-        if #targets == 0 then Main.CurrentTarget = nil; return nil end
-
-        local target = nil
-        local method = Config.LOCK_METHOD or "Nearest"
-
-        if method == "Nearest" then
-            local closestDist = math.huge
-            local myPos = Main.getRootPos()
-            for _, player in ipairs(targets) do
-                local dist = (myPos - player.Character.HumanoidRootPart.Position).Magnitude
-                if dist < closestDist then closestDist = dist; target = player end
-            end
-        elseif method == "Mouse" then
-            local mouse = lp:GetMouse()
-            local closestDist = math.huge
-            for _, player in ipairs(targets) do
-                local screenPos, onScreen = Workspace.CurrentCamera:WorldToScreenPoint(player.Character.HumanoidRootPart.Position)
-                if onScreen then
-                    local dist = (mouse.X - screenPos.X)^2 + (mouse.Y - screenPos.Y)^2
-                    if dist < closestDist then closestDist = dist; target = player end
-                end
-            end
-        elseif method == "Health" then
-            local lowestHp = math.huge
-            for _, player in ipairs(targets) do
-                local hp = Main.getPlayerHealth(player)
-                if hp < lowestHp then lowestHp = hp; target = player end
-            end
-        elseif method == "Bounty" then
-            local highestBounty = 0
-            for _, player in ipairs(targets) do
-                local bounty = Main.getPlayerBounty(player)
-                if bounty > highestBounty then highestBounty = bounty; target = player end
-            end
-        elseif method == "Level" then
-            local closestLevel = math.huge
-            local myLevel = Main.getPlayerLevel(lp)
-            for _, player in ipairs(targets) do
-                local diff = math.abs(Main.getPlayerLevel(player) - myLevel)
-                if diff < closestLevel then closestLevel = diff; target = player end
-            end
-        end
-
-        Main.CurrentTarget = target
-        return target
+    function Main.Dragon()
+        if Config.FRUIT~="Dragon"then return end
+        pcall(function()
+            local c=Main.gC()if not c then return end
+            if c:FindFirstChild("DragonHybrid")then return end
+            local r=c:FindFirstChild("Rage")if not r or not r:IsA("NumberValue")then return end
+            if r.Value>50 then VirtualInputManager:SendKeyEvent(true,Enum.KeyCode.V,false,game)task.wait(0.05)VirtualInputManager:SendKeyEvent(false,Enum.KeyCode.V,false,game)end
+        end)
     end
-    function Main.useSkill(skillName, delay)
-        delay = delay or SKILL_COOLDOWN
-        local now = tick()
-        if Main.SkillCooldowns[skillName] and (now - Main.SkillCooldowns[skillName]) < delay then return false end
-        local char = Main.getCharacter()
-        if not char then return false end
-        local tool = char:FindFirstChild(skillName) or char:FindFirstChildWhichIsA("Tool")
-        if not tool then return false end
-        local remote = tool:FindFirstChild("RemoteFunction") or tool:FindFirstChild("RemoteEvent") or tool:FindFirstChild("Activate")
-        if remote then
-            pcall(function()
-                if remote:IsA("RemoteFunction") then remote:InvokeServer()
-                elseif remote:IsA("RemoteEvent") then remote:FireServer()
-                end
-            end)
-            Main.SkillCooldowns[skillName] = now
-            return true
+
+    function Main.eqFruit()
+        local cfg=FruitConfigs[Config.FRUIT]if not cfg then return false end
+        local c=Main.gC()if not c then return false end
+        if c:FindFirstChild(cfg.T)then return true end
+        local bp=lp:FindFirstChild("Backpack")
+        if bp then
+            local t=bp:FindFirstChild(cfg.T)
+            if t then local h=Main.hum()if h then h:EquipTool(t)task.wait(0.1)return true end end
         end
         return false
     end
 
-    function Main.combatStep(target)
-        if not target or not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
-            Main.CurrentTarget = nil; return
-        end
-        local hrp = target.Character.HumanoidRootPart
-        local dist = Main.getDistanceFromChar(hrp.Position)
-        local myHrp = Main.getHRP()
-        if not myHrp then return end
-
-        if dist > ATTACK_RANGE then
-            local cf = CFrame.new(hrp.Position + (hrp.Position - myHrp.Position).Unit * math.min(dist - 5, 100))
-            if Config.BRING_TP == "Close" then
-                Main.teleportToCFrame(cf)
-            end
-            return
-        end
-
-        Main.teleportToCFrame(CFrame.new(hrp.Position + (hrp.Position - myHrp.Position).Unit * 8))
-        Main.useSkill("Melee", COMBAT_COOLDOWN)
-        Main.useSkill("Sword", COMBAT_COOLDOWN)
-        Main.useSkill("Gun", COMBAT_COOLDOWN)
-        Main.useSkill(Config.FRUIT or "Flame", SKILL_COOLDOWN)
+    function Main.fruitAtk()
+        local cfg=FruitConfigs[Config.FRUIT]if not cfg then return end
+        local c=Main.gC()if not c then return end
+        local h=c:FindFirstChild("HumanoidRootPart")if not h then return end
+        local t=Main.CurrentTargetPlayer if not t or not t.Character then return end
+        local th=t.Character:FindFirstChild("HumanoidRootPart")if not th then return end
+        if(th.Position-h.Position).Magnitude>FRUIT_ATTACK_RANGE then return end
+        local tool=c:FindFirstChild(cfg.T)
+        if not tool then if not Main.eqFruit()then return end;tool=c:FindFirstChild(cfg.T)if not tool then return end end
+        local r=tool:FindFirstChild(cfg.R)if not r then return end
+        pcall(function()local d=(th.Position-h.Position).Unit;r:FireServer(unpack(cfg.A(d)))end)
+    end
+    function Main.startTP()
+        if Main._instaTpConnection then Main._instaTpConnection:Disconnect()end
+        Main._instaTpConnection=RunService.Stepped:Connect(function()
+            local t=Main.CurrentTargetPlayer if not t or not t.Character then return end
+            pcall(function()
+                local c=Main.gC()local th=t.Character:FindFirstChild("HumanoidRootPart")local h=c and c:FindFirstChild("HumanoidRootPart")
+                if not h or not th then return end
+                local tn=t.Name
+                if not Main._playerPosHistory[tn]then Main._playerPosHistory[tn]={p={},t={}}end
+                local hist=Main._playerPosHistory[tn];local n=tick();local cp=th.Position
+                table.insert(hist.p,cp);table.insert(hist.t,n)
+                while #hist.p>PREDICTION_SAMPLES do table.remove(hist.p,1);table.remove(hist.t,1)end
+                local pp=cp
+                if #hist.p>=2 then
+                    local td=Vector3.new(0,0,0);local tt=0
+                    for i=2,#hist.p do
+                        local d=hist.p[i]-hist.p[i-1];local dt=hist.t[i]-hist.t[i-1]
+                        if dt>0 then td=td+d;tt=tt+dt end
+                    end
+                    if tt>0 then pp=cp+(td/tt)*PREDICTION_TIME end
+                end
+                h.CFrame=CFrame.new(pp)*CFrame.new(0,Y_OFFSET,0)
+            end)
+        end)
     end
 
-    function Main.bringMobsToTarget()
-        if not Config.BRING_MOBS then return end
-        local target = Main.CurrentTarget
-        if not target then return end
-        local tgtChar = target.Character
-        if not tgtChar or not tgtChar:FindFirstChild("HumanoidRootPart") then return end
-        local tgtPos = tgtChar.HumanoidRootPart.Position
-        local radius = Config.BRING_RADIUS or BRING_RADIUS
-        local mode = Config.BRING_MODE or "Normal"
-
-        for _, obj in ipairs(Workspace:GetDescendants()) do
-            if obj:IsA("Model") and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
-                local hum = obj.Humanoid
-                if hum.Health > 0 then
-                    local npcPos = obj.HumanoidRootPart.Position
-                    local dist = (npcPos - tgtPos).Magnitude
-                    if dist <= radius then
-                        local newPos = tgtPos + Vector3.new(math.random(-8,8), 0, math.random(-8,8))
-                        if mode == "Fast" then
-                            obj.HumanoidRootPart.CFrame = CFrame.new(newPos)
-                        else
-                            TweenService:Create(obj.HumanoidRootPart, TweenInfo.new(0.5), {CFrame=CFrame.new(newPos)}):Play()
-                        end
-                    end
-                end
+    function Main.healthEsc()
+        if Main._instaTpConnection then Main._instaTpConnection:Disconnect()Main._instaTpConnection=nil end
+        task.spawn(function()
+            local a=true
+            while a do
+                pcall(function()local c=Main.gC()if c then local h=c:FindFirstChild("HumanoidRootPart")if h then h.CFrame=CFrame.new(h.Position.X,h.Position.Y+ESCAPE_HEIGHT,h.Position.Z)end end end)
+                task.wait(0.05)
             end
-        end
+        end)
+        while true do task.wait(0.5)local h=Main.hum()if h and h.Health>=SAFE_HEALTH then break end end
+        task.wait(0.2);Main.startTP()
+    end
+
+    function Main.lowHP()local h=Main.hum()return h and h.Health<=LOW_HEALTH or false end
+    function Main.dead()local c=Main.gC()if not c then return false end;local h=c:FindFirstChild("Humanoid")if h and h.Health<=0 then return true end;local be=c:FindFirstChild("BodyEffects")if be then local d=be:FindFirstChild("Dead")if d and d.Value then return true end end;return false end
+
+    function Main.antiSeat()
+        if Main._antiSeatConnection then Main._antiSeatConnection:Disconnect()end
+        if Main._antiSeatConnection2 then Main._antiSeatConnection2:Disconnect()end
+        local c=Main.gC()if not c then return end;local h=c:FindFirstChild("Humanoid")if not h then return end
+        Main._antiSeatConnection=RunService.Heartbeat:Connect(function()if h.Sit then h.Sit=false;h:ChangeState(Enum.HumanoidStateType.Jumping)end end)
+        Main._antiSeatConnection2=h.StateChanged:Connect(function(_,n)if n==Enum.HumanoidStateType.Seated then h.Sit=false;h:ChangeState(Enum.HumanoidStateType.Jumping)end end)
+    end
+
+    function Main.onDeath()
+        if Main._instaTpConnection then Main._instaTpConnection:Disconnect()Main._instaTpConnection=nil end
+        if Main._antiSeatConnection then Main._antiSeatConnection:Disconnect()Main._antiSeatConnection=nil end
+        if Main._antiSeatConnection2 then Main._antiSeatConnection2:Disconnect()Main._antiSeatConnection2=nil end
+        Main.CurrentTargetPlayer=nil;Main._playerPosHistory={}
+        if Utils then Utils.flushStats()end
+        local nc=lp.Character or lp.CharacterAdded:Wait(10)
+        if nc then local nh=nc:WaitForChild("HumanoidRootPart",10);local nu=nc:WaitForChild("Humanoid",10)
+            if nh and nu then task.wait(1);Main.antiSeat();Main.startTP()
+                if not Main._deathConnected then nu.Died:Connect(function()Main.onDeath()end);Main._deathConnected=true end end end
     end
 
     function Main.serverHop()
-        local hopType = Config.HOP_TYPE or "Hop"
-        if hopType == "Rejoin" then
-            TeleportService:Teleport(game.PlaceId, lp)
+        if Main._hopping then return end;Main._hopping=true
+        pcall(function()if Utils then Utils.incrementServerHops()end end)
+        if Main._instaTpConnection then Main._instaTpConnection:Disconnect()Main._instaTpConnection=nil end
+        Main._hopping=false
+        local ht=Config.HOP_TYPE or "Hop"
+        if ht=="Rejoin"then TeleportService:Teleport(game.PlaceId,lp)
         else
-            local servers = {}
-            local success, result = pcall(function()
-                return HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?limit=100"))
-            end)
-            if success and result and result.data then
-                for _, server in ipairs(result.data) do
-                    if server.playing < server.maxPlayers and server.id ~= game.JobId then
-                        table.insert(servers, server.id)
-                    end
-                end
-                if #servers > 0 then
-                    local targetId = servers[math.random(1, #servers)]
-                    TeleportService:TeleportToPlaceInstance(game.PlaceId, targetId, lp)
-                end
-            end
+            local s,d=pcall(function()return HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?limit=100"))end)
+            if s and d and d.data then local p={}for _,sv in ipairs(d.data)do if sv.playing<sv.maxPlayers and sv.id~=game.JobId then table.insert(p,sv.id)end end
+                if #p>0 then TeleportService:TeleportToPlaceInstance(game.PlaceId,p[math.random(1,#p)],lp)end end
         end
-        if Utils then
-            if Config.AUTO_HOP then Utils.incrementAutoServerHops() else Utils.incrementServerHops() end
-        end
+        if Utils then Utils.flushStats()end
     end
 
-    function Main.checkBountyChange()
-        local currentBounty = Main.getPlayerBounty(lp)
-        if currentBounty > Main._lastBountyValue and Main._lastBountyValue > 0 then
-            local gained = currentBounty - Main._lastBountyValue
-            if gained > 0 and Utils then
-                Utils.updateStats(gained, 0)
-                Utils.flushStats()
-                if UI then UI:UpdateStatsText() end
-            end
-        elseif currentBounty < Main._lastBountyValue then
-            local lost = Main._lastBountyValue - currentBounty
-            if lost > 10000 and Utils then
-                Utils.notify("Bounty Lost!", "You lost " .. Utils.formatNumber(lost) .. " bounty!", 3)
-            end
-        end
-        Main._lastBountyValue = currentBounty
+    function Main.god()
+        local c=Main.gC()if not c then return end
+        local h=c:FindFirstChild("Humanoid")if h then h.MaxHealth=999999;h.Health=999999 end
+        local be=c:FindFirstChild("BodyEffects")if be then local d=be:FindFirstChild("Dead")if d then d.Value=false end local he=be:FindFirstChild("Health")if he then he.Value=999999 end end
     end
 
-    function Main.checkDeath()
-        local char = Main.getCharacter()
-        if not char then return false end
-        local hum = char:FindFirstChild("Humanoid")
-        if hum and hum.Health <= 0 then return true end
-        local bv = char:FindFirstChild("BodyEffects")
-        if bv then
-            local dead = bv:FindFirstChild("Dead")
-            if dead and dead.Value then return true end
+    function Main.invis()
+        local c=Main.gC()if not c then return end
+        for _,p in ipairs(c:GetDescendants())do if p:IsA("BasePart")then p.Transparency=1 end end
+        local h=Main.hum()if h then h.WalkSpeed=50 end
+    end
+
+    function Main.reset()local h=Main.hum()if h then h.Health=0 end end
+
+    function Main.bring()
+        if not Config.BRING_MOBS then return end
+        local t=Main.CurrentTargetPlayer if not t or not t.Character then return end
+        local th=t.Character:FindFirstChild("HumanoidRootPart")if not th then return end
+        local tp=th.Position;local r=Config.BRING_RADIUS or 280;local m=Config.BRING_MODE or "Normal"
+        for _,o in ipairs(Workspace:GetDescendants())do
+            if o:IsA("Model")and o:FindFirstChild("Humanoid")and o:FindFirstChild("HumanoidRootPart")then
+                local h=o.Humanoid;if h.Health>0 then
+                    local np=o.HumanoidRootPart.Position
+                    if(np-tp).Magnitude<=r then
+                        local np2=tp+Vector3.new(math.random(-8,8),0,math.random(-8,8))
+                        if m=="Fast"then o.HumanoidRootPart.CFrame=CFrame.new(np2)else TweenService:Create(o.HumanoidRootPart,TweenInfo.new(0.5),{CFrame=CFrame.new(np2)}):Play()end end end end end
+    end
+
+    function Main.getNPC(r)
+        local c=nil;local cd=math.huge;local mp=Main.pos()
+        for _,o in ipairs(Workspace:GetDescendants())do
+            if o:IsA("Model")and o:FindFirstChild("Humanoid")and o:FindFirstChild("HumanoidRootPart")then
+                local h=o.Humanoid;if h.Health>0 then
+                    local d=(o.HumanoidRootPart.Position-mp).Magnitude
+                    if d<=(r or Config.TARGET_DISTANCE or 280)and d<cd then c=o;cd=d end end end end
+        return c,cd
+    end
+
+    function Main.atkNPC(n)
+        if not n or not n:FindFirstChild("HumanoidRootPart")then return end
+        local nh=n.HumanoidRootPart;local d=Main.dist(nh.Position)
+        if d>30 then Main.tp(CFrame.new(nh.Position+Vector3.new(math.random(-8,8),0,math.random(-8,8))))task.wait(0.05)end
+        local h=Main.hrp()if not h then return end
+        Main.tp(CFrame.new(nh.Position+(nh.Position-h.Position).Unit*8))
+    end
+
+    function Main.useSkill(sn,delay)
+        delay=delay or 0.3;local n=tick()
+        if Main.SkillCooldowns[sn]and(n-Main.SkillCooldowns[sn])<delay then return false end
+        local c=Main.gC()if not c then return false end
+        local tool=nil
+        for _,ch in ipairs(c:GetChildren())do if ch:IsA("Tool")and(ch.Name:lower():find(sn:lower())or sn:lower():find(ch.Name:lower()))then tool=ch;break end end
+        if not tool then
+            local bp=lp:FindFirstChild("Backpack")
+            if bp then for _,ch in ipairs(bp:GetChildren())do if ch:IsA("Tool")and(ch.Name:lower():find(sn:lower())or sn:lower():find(ch.Name:lower()))then tool=ch;break end end
+                if tool then local h=Main.hum()if h then h:EquipTool(tool)task.wait(0.05)end end end
         end
+        if not tool then return false end
+        local r=tool:FindFirstChild("RemoteFunction")or tool:FindFirstChild("RemoteEvent")or tool:FindFirstChild("Activate")
+        if r then pcall(function()if r:IsA("RemoteFunction")then r:InvokeServer()else r:FireServer()end end)
+            Main.SkillCooldowns[sn]=n;return true end
+        for _,ch in ipairs(tool:GetChildren())do if ch:IsA("RemoteFunction")or ch:IsA("RemoteEvent")then
+            pcall(function()if ch:IsA("RemoteFunction")then ch:InvokeServer()else ch:FireServer()end end)
+            Main.SkillCooldowns[sn]=n;return true end end
         return false
     end
 
-    function Main.autoFarmBounty()
-        if Main.checkDeath() then Main.Paused = true
-            task.wait(3); Main.Paused = false; return
-        end
-        local now = tick()
-        if now - Main.LastTargetScan < Main.TargetScanInterval then return end
-        Main.LastTargetScan = now
-
-        if not Main.CurrentTarget or not Main.CurrentTarget.Character or
-            not Main.CurrentTarget.Character:FindFirstChild("HumanoidRootPart") or
-            (Main.CurrentTarget.Character:FindFirstChild("Humanoid") and
-            Main.CurrentTarget.Character.Humanoid.Health <= 0) then
-            Main.selectTarget()
-        end
-
-        if Main.CurrentTarget then
-            Main.combatStep(Main.CurrentTarget)
-            if Config.BRING_MOBS then Main.bringMobsToTarget() end
-        end
-
-        if now - Main._combatCooldown > 5 then
-            Main.checkBountyChange()
-            Main._combatCooldown = now
-        end
+    function Main.cycle()
+        local v=Main.getTargets()if #v==0 then Main.CurrentTargetPlayer=nil;return end
+        Main.CurrentTargetPlayer=v[math.random(1,#v)]
     end
 
-    function Main.godMode()
-        local char = Main.getCharacter()
-        if not char then return end
-        local humanoid = char:FindFirstChild("Humanoid")
-        if humanoid then
-            humanoid.MaxHealth = 999999
-            humanoid.Health = 999999
-        end
-        local bre = char:FindFirstChild("BodyEffects")
-        if bre then
-            local dead = bre:FindFirstChild("Dead")
-            if dead then dead.Value = false end
-            local health = bre:FindFirstChild("Health")
-            if health then health.Value = 999999 end
-        end
+    function Main.farmBounty()
+        if Main.dead()then Main.Paused=true;task.wait(3);Main.Paused=false;return end
+        if Main.lowHP()then Main.healthEsc();return end
+        local v=Main.getTargets()
+        if #v==0 then if Config.AUTO_HOP then Main.serverHop()end;return end
+        if not Main.CurrentTargetPlayer or not Main.CurrentTargetPlayer.Character or not Main.CurrentTargetPlayer.Character:FindFirstChild("HumanoidRootPart")then Main.cycle()end
+        if Main.CurrentTargetPlayer then Main.eqFruit()Main.fruitAtk()if Config.BRING_MOBS then Main.bring()end end
     end
 
-    function Main.invisibility()
-        local char = Main.getCharacter()
-        if not char then return end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.Transparency = 1
-            end
-        end
-        local hum = char:FindFirstChild("Humanoid")
-        if hum then hum.WalkSpeed = 50 end
+    function Main.farmNPC()
+        if Main.dead()then Main.Paused=true;task.wait(3);Main.Paused=false;return end
+        local n=Main.getNPC(Config.TARGET_DISTANCE or 280)if not n then return end;Main.atkNPC(n)
     end
 
-    function Main.resetCharacter()
-        local char = Main.getCharacter()
-        if char then
-            local hum = char:FindFirstChild("Humanoid")
-            if hum then hum.Health = 0 end
+    function Main.bountyListen()
+        pcall(function()
+            local ls=lp:WaitForChild("leaderstats",5)if not ls then return end
+            local bv=ls:FindFirstChild("Bounty/Honor")if not bv then return end
+            Main._prevBounty=tonumber(bv.Value)or 0
+            bv.Changed:Connect(function(nv)
+                local nb=tonumber(nv)or 0;local g=nb-Main._prevBounty
+                if g>0 then Main._sessionKills=Main._sessionKills+1;Main._sessionBounty=Main._sessionBounty+g
+                    if Utils then Utils.updateStats(g,1)Utils.addKillFeedEntry({bounty=g,target=Main.CurrentTargetPlayer and Main.CurrentTargetPlayer.Name or "Unknown",time=os.time()})end
+                    if Config.AUTO_HOP and Main._sessionKills>=4 then Main.serverHop()end end
+                Main._prevBounty=nb
+            end)
+        end)
+    end
+    function Main.deathSetup()
+        local function onChar(c)
+            local h=c:WaitForChild("Humanoid",10)
+            if h then h.Died:Connect(function()Main.onDeath()end);Main._deathConnected=true end
         end
+        lp.CharacterAdded:Connect(onChar)
+        if lp.Character then local h=lp.Character:FindFirstChild("Humanoid")if h then h.Died:Connect(function()Main.onDeath()end);Main._deathConnected=true end end
     end
 
-    function Main.autoFarmLoop()
-        while Main.Running do
-            if not Main.Paused then
-                local s, e = pcall(function()
-                    if Config.AUTO_FARM_BOUNTY then Main.autoFarmBounty() end
-                    if Config.AUTO_GODMODE then Main.godMode() end
-                    if Config.AUTO_INVIS then Main.invisibility() end
-                    if Config.AUTO_BUSO then
-                        pcall(function()
-                            local data = lp:FindFirstChild("Data")
-                            if data then
-                                local buso = data:FindFirstChild("ObservationHaki")
-                                if buso and not buso.Value then buso.Value = true end
-                                local haki = data:FindFirstChild("ObservationHaki")
-                                if haki and not haki.Value then haki.Value = true end
-                            end
-                        end)
-                    end
-                end)
-                if not s and Utils then Utils.logError(e, "AutoFarmLoop") end
-            end
-            task.wait(0.15)
-        end
+    function Main.kickDetect()
+        pcall(function()
+            local po=CoreGui:FindFirstChild("RobloxPromptGui")
+            if po then local po2=po:FindFirstChild("promptOverlay")
+                if po2 then po2.ChildAdded:Connect(function(c)
+                    if c.Name=='ErrorPrompt'then local ma=c:FindFirstChild('MessageArea')
+                        if ma and ma:FindFirstChild("ErrorFrame")and not Main._hopping then TeleportService:TeleportToPlaceInstance(game.PlaceId,game.JobId,lp)end end
+                end)end end
+        end)
     end
+
     function Main.init()
-        Config = getgenv()._DeniaConfig
-        Utils = getgenv()._DeniaUtils
-        UI = getgenv()._DeniaUI
-        if not Config or not Utils or not UI then
-            Utils = Utils or getgenv()._DeniaUtils
-            if Utils then Utils.logError("Missing dependencies in Main.init()", "Main") end
-            return false
-        end
-        Main._lastBountyValue = Main.getPlayerBounty(lp)
-        Main.Running = true
-        local loopConn = RunService.Heartbeat:Connect(function()
-            Main.autoFarmLoop()
-        end)
-        table.insert(Main.LoopConnections, loopConn)
+        Config=getgenv()._DeniaConfig;Utils=getgenv()._DeniaUtils;UI=getgenv()._DeniaUI
+        if not Config or not Utils or not UI then if Utils then Utils.logError("Missing deps","Main")end;return false end
+        Main._prevBounty=Main.bounty(lp);Main.bountyListen();Main.deathSetup();Main.kickDetect();Main.Running=true
 
-        local antiBanConn = RunService.Heartbeat:Connect(function()
-            if Config.ANTI_BAN then
-                pcall(function()
-                    local char = Main.getCharacter()
-                    if char and char:FindFirstChild("Humanoid") then
-                        char.Humanoid.Name = "HumanoidOfLocal"
-                    end
-                end)
-            end
+        local hb=RunService.Heartbeat:Connect(function()
+            if not Main.Running or Main.Paused then return end
+            pcall(function()
+                if Config.AUTO_FARM_BOUNTY then Main.farmBounty()end
+            end)
         end)
-        table.insert(Main.LoopConnections, antiBanConn)
+        table.insert(Main.LoopConnections,hb)
 
-        local hopCheckConn = RunService.Stepped:Connect(function()
-            if Config.AUTO_HOP then
-                local stats = Utils and Utils.loadStats()
-                if stats and stats.totalKills and stats.totalKills >= 4 then
-                    Main.serverHop()
-                end
-            end
+        local st=RunService.Stepped:Connect(function()
+            if not Main.Running then return end
+            pcall(function()
+                if Config.AUTO_GODMODE then Main.god()end
+                if Config.AUTO_INVIS then Main.invis()end
+                if Config.AUTO_BUSO then pcall(function()local c=Main.gC()if c and not c:FindFirstChild("HasBuso")then ReplicatedStorage:FindFirstChild("Remotes"):FindFirstChild("CommF_"):InvokeServer("Buso")end end)end
+                if Config.AUTO_OBS then pcall(function()local d=lp:FindFirstChild("Data")if d then local o=d:FindFirstChild("Observation")if o and not o.Value then o.Value=true end end end)
+                if Config.AUTO_FARM_LEVEL or Config.AUTO_FARM_MASTERY then Main.farmNPC()end
+                if Config.AUTO_NPC then Main.farmNPC()end
+                if Config.AUTO_ELITE then Main.farmNPC()end
+                if Config.AUTO_CHEST then Main.farmNPC()end -- chest/elite simplified
+            end)
         end)
-        table.insert(Main.LoopConnections, hopCheckConn)
-        Utils.logDebug(Utils.DEBUG_LEVELS.INFO, "Main", "Main module initialized")
+        table.insert(Main.LoopConnections,st)
+
+        local bu=RunService.Heartbeat:Connect(function()
+            if not Main.Running then return end
+            pcall(function()Main.Buso()Main.Dragon()
+                if Config.ANTI_BAN then local c=Main.gC()if c and c:FindFirstChild("Humanoid")and not c:FindFirstChild("HumanoidOfLocal")then c.Humanoid.Name="HumanoidOfLocal"end end
+            end)
+        end)
+        table.insert(Main.LoopConnections,bu)
+
+        local pvp=RunService.Heartbeat:Connect(function()
+            if not Main.Running then return end;local n=tick()
+            if n-Main._lastPvPTime>=PVP_INT then Main._lastPvPTime=n;Main.PvP()end
+        end)
+        table.insert(Main.LoopConnections,pvp)
+
+        Main.antiSeat();Main.startTP()
+        if Utils then Utils.logDebug(Utils.DEBUG_LEVELS.INFO,"Main","v3.0 initialized")end
         return true
     end
 
     function Main.stop()
-        Main.Running = false
-        for _, conn in ipairs(Main.LoopConnections) do
-            pcall(function() conn:Disconnect() end)
-        end
-        Main.LoopConnections = {}
-        Main.CurrentTarget = nil
-        Utils = Utils or getgenv()._DeniaUtils
-        if Utils then Utils.logDebug(Utils.DEBUG_LEVELS.INFO, "Main", "Main module stopped") end
+        Main.Running=false
+        for _,c in ipairs(Main.LoopConnections)do pcall(function()c:Disconnect()end)end
+        Main.LoopConnections={}
+        if Main._instaTpConnection then Main._instaTpConnection:Disconnect()Main._instaTpConnection=nil end
+        if Main._antiSeatConnection then Main._antiSeatConnection:Disconnect()Main._antiSeatConnection=nil end
+        if Main._antiSeatConnection2 then Main._antiSeatConnection2:Disconnect()Main._antiSeatConnection2=nil end
+        Main.CurrentTargetPlayer=nil;Main._playerPosHistory={}
+        if Utils then Utils.flushStats();Utils.logDebug(Utils.DEBUG_LEVELS.INFO,"Main","Stopped")end
     end
 
     return Main
+end
+_modules["advanced"] = function()
+    local Adv = {}
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local ReplicatedStorage = game:GetService("ReplicatedStorage")
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    local Workspace = game:GetService("Workspace")
+    local lp = Players.LocalPlayer
+
+    Adv._cfController = nil
+    Adv._namecallHookActive = false
+    Adv._oldNamecall = nil
+    Adv._aimTarget = nil
+    Adv._espEnabled = false
+    Adv._espObjs = {}
+    Adv._espConn = nil
+    Adv._simConn = nil
+    Adv._fastAtkConn = nil
+    Adv._killAuraConn = nil
+    Adv._autoFarmConn = nil
+    Adv._antiShakeDone = false
+    Adv._bodyClip = nil
+    Adv._questData = nil
+    Adv._currentFarmTarget = nil
+    Adv._fastAtkEnabled = false
+    Adv._killAuraEnabled = false
+
+    local PlaceId = game.PlaceId
+    local World1, World2, World3 = 2753915549, 4442272183, 7449423635
+    local CurrentSea = PlaceId == World1 and 1 or PlaceId == World2 and 2 or PlaceId == World3 and 3 or 0
+
+    local QuestData = {
+        [1] = {
+            {min=1,max=9,mob="Bandit",npc="BanditQuest1",q="Bandit",npcCF=CFrame.new(1059,16,-1192),mobCF=CFrame.new(1038,17,-1248),a={"StartQuest","BanditQuest1",1}},
+            {min=10,max=19,mob="Monkey",npc="JungleQuest",q="Monkey",npcCF=CFrame.new(-1601,36,-176),mobCF=CFrame.new(-1626,37,-196),a={"StartQuest","JungleQuest",1}},
+            {min=20,max=29,mob="Gorilla",npc="JungleQuest",q="Gorilla",npcCF=CFrame.new(-1601,36,-176),mobCF=CFrame.new(-1556,39,-230),a={"StartQuest","JungleQuest",2}},
+            {min=30,max=59,mob="Pirate",npc="BuggyQuest1",q="Pirate",npcCF=CFrame.new(-1139,5,-3925),mobCF=CFrame.new(-1165,5,-3930),a={"StartQuest","BuggyQuest1",1}},
+            {min=60,max=89,mob="Brute",npc="BuggyQuest1",q="Brute",npcCF=CFrame.new(-1139,5,-3925),mobCF=CFrame.new(-1190,8,-3898),a={"StartQuest","BuggyQuest1",2}},
+            {min=90,max=119,mob="Desert Bandit",npc="DesertQuest",q="DesertBandit",npcCF=CFrame.new(1063,7,-4283),mobCF=CFrame.new(1098,7,-4285),a={"StartQuest","DesertQuest",1}},
+            {min=120,max=149,mob="Desert Officer",npc="DesertQuest",q="DesertOfficer",npcCF=CFrame.new(1063,7,-4283),mobCF=CFrame.new(1538,9,-4375),a={"StartQuest","DesertQuest",2}},
+            {min=150,max=174,mob="Snow Bandit",npc="SnowQuest",q="SnowBandit",npcCF=CFrame.new(1398,12,-2970),mobCF=CFrame.new(1343,11,-2962),a={"StartQuest","SnowQuest",1}},
+            {min=175,max=199,mob="Snowman",npc="SnowQuest",q="Snowman",npcCF=CFrame.new(1398,12,-2970),mobCF=CFrame.new(1229,17,-2992),a={"StartQuest","SnowQuest",2}},
+            {min=200,max=224,mob="Chief Petty Officer",npc="MarineQuest2",q="Chief",npcCF=CFrame.new(-5035,19,-2732),mobCF=CFrame.new(-4889,22,-2789),a={"StartQuest","MarineQuest2",1}},
+            {min=225,max=249,mob="Sky Bandit",npc="SkyQuest",q="SkyBandit",npcCF=CFrame.new(-4849,718,-2635),mobCF=CFrame.new(-4872,736,-2716),a={"StartQuest","SkyQuest",1}},
+            {min=250,max=299,mob="Dark Master",npc="SkyQuest",q="DarkMaster",npcCF=CFrame.new(-4849,718,-2635),mobCF=CFrame.new(-5210,727,-3100),a={"StartQuest","SkyQuest",2}},
+            {min=300,max=374,mob="Toga Warrior",npc="ColosseumQuest",q="Toga",npcCF=CFrame.new(-1429,7,-5190),mobCF=CFrame.new(-1571,8,-5251),a={"StartQuest","ColosseumQuest",1}},
+            {min=375,max=449,mob="Gladiator",npc="ColosseumQuest",q="Gladiator",npcCF=CFrame.new(-1429,7,-5190),mobCF=CFrame.new(-1381,12,-5317),a={"StartQuest","ColosseumQuest",2}},
+            {min=450,max=524,mob="Military Soldier",npc="MagmaQuest",q="Military",npcCF=CFrame.new(-5316,19,-1235),mobCF=CFrame.new(-5435,17,-1268),a={"StartQuest","MagmaQuest",1}},
+            {min=525,max=599,mob="Military Spy",npc="MagmaQuest",q="Military2",npcCF=CFrame.new(-5316,19,-1235),mobCF=CFrame.new(-5784,17,-1239),a={"StartQuest","MagmaQuest",2}},
+            {min=600,max=674,mob="Fishman Warrior",npc="FishmanQuest",q="Fishman",npcCF=CFrame.new(61123,18,1565),mobCF=CFrame.new(61210,16,1561),a={"StartQuest","FishmanQuest",1}},
+            {min=675,max=749,mob="Fishman Commando",npc="FishmanQuest",q="Fishman2",npcCF=CFrame.new(61123,18,1565),mobCF=CFrame.new(61373,16,1533),a={"StartQuest","FishmanQuest",2}},
+            {min=750,max=799,mob="God's Guard",npc="SkyExp1Quest",q="Guard",npcCF=CFrame.new(-4709,853,-3865),mobCF=CFrame.new(-4741,850,-3941),a={"StartQuest","SkyExp1Quest",1}},
+            {min=800,max=874,mob="Shanda",npc="SkyExp1Quest",q="Shanda",npcCF=CFrame.new(-4709,853,-3865),mobCF=CFrame.new(-5221,854,-3942),a={"StartQuest","SkyExp1Quest",2}},
+            {min=875,max=949,mob="Royal Squad",npc="SkyExp2Quest",q="Squad",npcCF=CFrame.new(-7907,555,-484),mobCF=CFrame.new(-7782,558,-473),a={"StartQuest","SkyExp2Quest",1}},
+            {min=950,max=999,mob="Royal Soldier",npc="SkyExp2Quest",q="Soldier",npcCF=CFrame.new(-7907,555,-484),mobCF=CFrame.new(-7856,563,-479),a={"StartQuest","SkyExp2Quest",2}},
+        },
+        [2] = {
+            {min=700,max=724,mob="Raider",npc="Area1Quest",q="Raider",npcCF=CFrame.new(-429,72,1836),mobCF=CFrame.new(-728,53,2346),a={"StartQuest","Area1Quest",1}},
+            {min=725,max=774,mob="Mercenary",npc="Area1Quest",q="Mercenary",npcCF=CFrame.new(-429,72,1836),mobCF=CFrame.new(-1004,80,1425),a={"StartQuest","Area1Quest",2}},
+            {min=775,max=799,mob="Swan Pirate",npc="Area2Quest",q="Swan",npcCF=CFrame.new(638,72,918),mobCF=CFrame.new(1069,138,1322),a={"StartQuest","Area2Quest",1}},
+            {min=800,max=874,mob="Factory Staff",npc="Area2Quest",q="Staff",npcCF=CFrame.new(633,73,919),mobCF=CFrame.new(73,82,-27),a={"StartQuest","Area2Quest",2}},
+            {min=875,max=899,mob="Marine Lieutenant",npc="MarineQuest3",q="Lieutenant",npcCF=CFrame.new(-2441,72,-3216),mobCF=CFrame.new(-2821,76,-3070),a={"StartQuest","MarineQuest3",1}},
+            {min=900,max=949,mob="Marine Captain",npc="MarineQuest3",q="Captain",npcCF=CFrame.new(-2441,72,-3216),mobCF=CFrame.new(-1861,80,-3255),a={"StartQuest","MarineQuest3",2}},
+            {min=950,max=974,mob="Zombie",npc="ZombieQuest",q="Zombie",npcCF=CFrame.new(-5497,48,-795),mobCF=CFrame.new(-5658,79,-929),a={"StartQuest","ZombieQuest",1}},
+            {min=975,max=999,mob="Vampire",npc="ZombieQuest",q="Vampire",npcCF=CFrame.new(-5497,48,-795),mobCF=CFrame.new(-6038,32,-1341),a={"StartQuest","ZombieQuest",2}},
+            {min=1000,max=1049,mob="Snow Trooper",npc="SnowMountainQuest",q="Trooper",npcCF=CFrame.new(610,400,-5372),mobCF=CFrame.new(549,427,-5564),a={"StartQuest","SnowMountainQuest",1}},
+            {min=1050,max=1099,mob="Winter Warrior",npc="SnowMountainQuest",q="Warrior",npcCF=CFrame.new(610,400,-5372),mobCF=CFrame.new(1143,476,-5199),a={"StartQuest","SnowMountainQuest",2}},
+            {min=1100,max=1124,mob="Lab Subordinate",npc="IceSideQuest",q="Subordinate",npcCF=CFrame.new(-6064,15,-4903),mobCF=CFrame.new(-5707,16,-4513),a={"StartQuest","IceSideQuest",1}},
+            {min=1125,max=1174,mob="Horned Warrior",npc="IceSideQuest",q="Horned",npcCF=CFrame.new(-6064,15,-4903),mobCF=CFrame.new(-6341,16,-5723),a={"StartQuest","IceSideQuest",2}},
+            {min=1175,max=1199,mob="Magma Ninja",npc="FireSideQuest",q="Ninja",npcCF=CFrame.new(-5428,15,-5299),mobCF=CFrame.new(-5450,77,-5808),a={"StartQuest","FireSideQuest",1}},
+            {min=1200,max=1249,mob="Lava Pirate",npc="FireSideQuest",q="Lava",npcCF=CFrame.new(-5428,15,-5299),mobCF=CFrame.new(-5213,50,-4701),a={"StartQuest","FireSideQuest",2}},
+            {min=1250,max=1274,mob="Ship Deckhand",npc="ShipQuest1",q="Deckhand",npcCF=CFrame.new(1038,125,32912),mobCF=CFrame.new(1212,151,33059),a={"StartQuest","ShipQuest1",1}},
+            {min=1275,max=1299,mob="Ship Engineer",npc="ShipQuest1",q="Engineer",npcCF=CFrame.new(1038,125,32912),mobCF=CFrame.new(919,44,32780),a={"StartQuest","ShipQuest1",2}},
+            {min=1300,max=1324,mob="Ship Steward",npc="ShipQuest2",q="Steward",npcCF=CFrame.new(969,125,33244),mobCF=CFrame.new(919,130,33436),a={"StartQuest","ShipQuest2",1}},
+            {min=1325,max=1349,mob="Ship Officer",npc="ShipQuest2",q="Officer",npcCF=CFrame.new(969,125,33244),mobCF=CFrame.new(1036,181,33316),a={"StartQuest","ShipQuest2",2}},
+            {min=1350,max=1374,mob="Arctic Warrior",npc="FrostQuest",q="Arctic",npcCF=CFrame.new(5668,27,-6486),mobCF=CFrame.new(5966,63,-6179),a={"StartQuest","FrostQuest",1}},
+            {min=1375,max=1424,mob="Snow Lurker",npc="FrostQuest",q="Lurker",npcCF=CFrame.new(5668,27,-6486),mobCF=CFrame.new(5407,69,-6881),a={"StartQuest","FrostQuest",2}},
+            {min=1425,max=1449,mob="Sea Soldier",npc="ForgottenQuest",q="Soldier",npcCF=CFrame.new(-3054,236,-10143),mobCF=CFrame.new(-3028,65,-9775),a={"StartQuest","ForgottenQuest",1}},
+            {min=1450,max=1499,mob="Water Fighter",npc="ForgottenQuest",q="Fighter",npcCF=CFrame.new(-3054,236,-10143),mobCF=CFrame.new(-3291,252,-10501),a={"StartQuest","ForgottenQuest",2}},
+        },
+        [3] = {
+            {min=1500,max=1524,mob="Pirate Millionaire",npc="PiratePortQuest",q="Millionaire",npcCF=CFrame.new(-290,43,5582),mobCF=CFrame.new(-246,47,5584),a={"StartQuest","PiratePortQuest",1}},
+            {min=1525,max=1574,mob="Pistol Billionaire",npc="PiratePortQuest",q="Billionaire",npcCF=CFrame.new(-290,43,5582),mobCF=CFrame.new(-187,86,6014),a={"StartQuest","PiratePortQuest",2}},
+            {min=1575,max=1599,mob="Dragon Crew Warrior",npc="DragonCrewQuest",q="Warrior",npcCF=CFrame.new(6739,128,-714),mobCF=CFrame.new(6921,56,-943),a={"StartQuest","DragonCrewQuest",1}},
+            {min=1600,max=1624,mob="Dragon Crew Archer",npc="DragonCrewQuest",q="Archer",npcCF=CFrame.new(6739,128,-714),mobCF=CFrame.new(6818,485,513),a={"StartQuest","DragonCrewQuest",2}},
+            {min=1625,max=1649,mob="Hydra Enforcer",npc="VenomCrewQuest",q="Enforcer",npcCF=CFrame.new(5214,1005,759),mobCF=CFrame.new(4585,1003,706),a={"StartQuest","VenomCrewQuest",1}},
+            {min=1650,max=1699,mob="Venomous Assailant",npc="VenomCrewQuest",q="Assailant",npcCF=CFrame.new(5214,1005,759),mobCF=CFrame.new(4639,1079,882),a={"StartQuest","VenomCrewQuest",2}},
+            {min=1700,max=1724,mob="Marine Commodore",npc="MarineTreeIsland",q="Commodore",npcCF=CFrame.new(2181,28,-6742),mobCF=CFrame.new(2286,73,-7160),a={"StartQuest","MarineTreeIsland",1}},
+            {min=1725,max=1774,mob="Marine Rear Admiral",npc="MarineTreeIsland",q="Admiral",npcCF=CFrame.new(2181,29,-6740),mobCF=CFrame.new(3657,161,-7002),a={"StartQuest","MarineTreeIsland",2}},
+            {min=1775,max=1799,mob="Fishman Raider",npc="DeepForestIsland3",q="Raider",npcCF=CFrame.new(-10581,331,-8761),mobCF=CFrame.new(-10594,332,-8786),a={"StartQuest","DeepForestIsland3",1}},
+            {min=1800,max=1849,mob="Fishman Captain",npc="DeepForestIsland3",q="Captain",npcCF=CFrame.new(-10581,331,-8761),mobCF=CFrame.new(-10832,332,-8807),a={"StartQuest","DeepForestIsland3",2}},
+            {min=1850,max=1899,mob="Ghost Pirate",npc="HauntedQuest1",q="Ghost",npcCF=CFrame.new(-9507,142,5561),mobCF=CFrame.new(-9496,140,5565),a={"StartQuest","HauntedQuest1",1}},
+            {min=1900,max=1949,mob="Ghost Pirate Captain",npc="HauntedQuest1",q="GhostCaptain",npcCF=CFrame.new(-9507,142,5561),mobCF=CFrame.new(-9562,141,5549),a={"StartQuest","HauntedQuest1",2}},
+            {min=1950,max=1999,mob="Elite Pirate",npc="HauntedQuest2",q="Elite",npcCF=CFrame.new(-9524,59,5490),mobCF=CFrame.new(-9526,62,5428),a={"StartQuest","HauntedQuest2",1}},
+            {min=2000,max=2049,mob="Elite Pirate Captain",npc="HauntedQuest2",q="EliteCaptain",npcCF=CFrame.new(-9524,59,5490),mobCF=CFrame.new(-9520,55,5347),a={"StartQuest","HauntedQuest2",2}},
+            {min=2050,max=2099,mob="Sea of Treats Crew",npc="CocoaWarriorsQuest",q="SeaCrew",npcCF=CFrame.new(-614,44,-10812),mobCF=CFrame.new(-723,49,-11003),a={"StartQuest","CocoaWarriorsQuest",1}},
+            {min=2100,max=2149,mob="Cocoa Warrior",npc="CocoaWarriorsQuest",q="Cocoa",npcCF=CFrame.new(-614,44,-10812),mobCF=CFrame.new(-649,60,-11066),a={"StartQuest","CocoaWarriorsQuest",2}},
+            {min=2150,max=2199,mob="Graham",npc="GrahamQuest",q="Graham",npcCF=CFrame.new(-926,44,-10870),mobCF=CFrame.new(-1053,45,-10980),a={"StartQuest","GrahamQuest",1}},
+            {min=2200,max=2249,mob="The Son of Graham",npc="GrahamQuest",q="SonGraham",npcCF=CFrame.new(-926,44,-10870),mobCF=CFrame.new(-1118,55,-10964),a={"StartQuest","GrahamQuest",2}},
+            {min=2250,max=2299,mob="Captain Elephant",npc="CrewQuest",q="Elephant",npcCF=CFrame.new(-13581,89,-12329),mobCF=CFrame.new(-13823,88,-12470),a={"StartQuest","CrewQuest",1}},
+            {min=2300,max=2349,mob="Jaw Shield Pirate",npc="CrewQuest",q="Jaw",npcCF=CFrame.new(-13581,89,-12329),mobCF=CFrame.new(-13893,90,-12557),a={"StartQuest","CrewQuest",2}},
+            {min=2350,max=2399,mob="Sailor",npc="MarineQuest4",q="Sailor",npcCF=CFrame.new(-13074,34,-13358),mobCF=CFrame.new(-13097,34,-13388),a={"StartQuest","MarineQuest4",1}},
+            {min=2400,max=2449,mob="Marine Commando",npc="MarineQuest4",q="Commando",npcCF=CFrame.new(-13074,34,-13358),mobCF=CFrame.new(-13168,35,-13268),a={"StartQuest","MarineQuest4",2}},
+            {min=2450,max=2499,mob="Reborn Skeleton",npc="CursedCrewQuest",q="Skeleton",npcCF=CFrame.new(-11999,121,-8791),mobCF=CFrame.new(-11830,122,-8693),a={"StartQuest","CursedCrewQuest",1}},
+            {min=2500,max=2550,mob="Living Zombie",npc="CursedCrewQuest",q="Zombie",npcCF=CFrame.new(-11999,121,-8791),mobCF=CFrame.new(-11856,122,-8847),a={"StartQuest","CursedCrewQuest",2}},
+        }
+    }
+
+    function Adv.getSea() return CurrentSea end
+
+    function Adv.getQuestForLevel(lvl)
+        local sq=QuestData[CurrentSea]
+        if not sq then return nil end
+        for _,q in ipairs(sq)do if lvl>=q.min and lvl<=q.max then return q end end
+        return nil
+    end
+
+    function Adv.setupCombatFramework()
+        pcall(function()
+            local ps=lp:FindFirstChild("PlayerScripts")
+            if not ps then return end
+            local cf=ps:FindFirstChild("CombatFramework")
+            if not cf then return end
+            local req=require(cf)
+            local up=getupvalues(req)
+            for i,v in ipairs(up)do
+                if type(v)=="table"and v.activeController then
+                    Adv._cfController=v
+                    v.activeController.hitboxMagnitude=200
+                    v.activeController.focusStart=0
+                    v.activeController.timeToNextBlock=0
+                    v.activeController.timeToNextAttack=0
+                    v.activeController.attacking=false
+                    v.activeController.increment=1
+                    break
+                end
+            end
+        end)
+    end
+
+    function Adv.attack()
+        if not Adv._cfController then Adv.setupCombatFramework()end
+        if Adv._cfController and Adv._cfController.activeController then
+            pcall(function()Adv._cfController.activeController:attack()end)
+        end
+    end
+
+    function Adv.fastAttack()
+        Adv.attack()
+        pcall(function()
+            local ps=lp:FindFirstChild("PlayerScripts")
+            if not ps then return end
+            local cf=ps:FindFirstChild("CombatFramework")
+            if not cf then return end
+            local req=require(cf)
+            local up=getupvalues(req)
+            for _,v in ipairs(up)do
+                if type(v)=="table"and type(v.wrapAttackAnimationAsync)=="function"then
+                    v.wrapAttackAnimationAsync=function(a,b,c,d)
+                        local L=a;if type(L)=="table"and type(L.Play)=="function"then L:Play(0.001,0.001,0.001)end
+                    end
+                    break
+                end
+            end
+        end)
+    end
+
+    function Adv.setupNamecall()
+        if Adv._namecallHookActive then return end
+        pcall(function()
+            local mt=getrawmetatable(game)
+            if not mt then return end
+            Adv._oldNamecall=mt.__namecall
+            setreadonly(mt,false)
+            mt.__namecall=newcclosure(function(self,...)
+                local method=getnamecallmethod()
+                if method=="FireServer"and Adv._aimTarget then
+                    local args={...}
+                    if args[1]and type(args[1])=="Vector3"then
+                        local tc=Adv._aimTarget.Character
+                        if tc and tc:FindFirstChild("HumanoidRootPart")then
+                            args[1]=tc.HumanoidRootPart.Position
+                            return Adv._oldNamecall(self,unpack(args))
+                        end
+                    elseif args[1]and type(args[1])=="table"and type(args[1].Position)=="Vector3"then
+                        local tc=Adv._aimTarget.Character
+                        if tc and tc:FindFirstChild("HumanoidRootPart")then
+                            args[1]=tc.HumanoidRootPart.Position
+                            return Adv._oldNamecall(self,unpack(args))
+                        end
+                    end
+                end
+                return Adv._oldNamecall(self,...)
+            end)
+            setreadonly(mt,true)
+            Adv._namecallHookActive=true
+        end)
+    end
+
+    function Adv.setAim(p)Adv._aimTarget=p end
+    function Adv.clearAim()Adv._aimTarget=nil end
+
+    function Adv.setupSimRadius()
+        if Adv._simConn then Adv._simConn:Disconnect()end
+        Adv._simConn=RunService.RenderStepped:Connect(function()
+            pcall(function()
+                sethiddenproperty(lp,"SimulationRadius",math.huge)
+                if lp.Character then sethiddenproperty(lp.Character,"SimulationRadius",math.huge)end
+            end)
+        end)
+    end
+
+    function Adv.noShake()
+        if Adv._antiShakeDone then return end
+        pcall(function()
+            local util=ReplicatedStorage:FindFirstChild("Util")
+            if util then
+                local cs=util:FindFirstChild("CameraShaker")
+                if cs then
+                    local main=cs:FindFirstChild("Main")
+                    if main then
+                        local CS=require(main)
+                        local noop=function()end
+                        CS.StartShake=noop;CS.ShakeOnce=noop;CS.ShakeSustain=noop
+                        CS.CameraShakeInstance=noop;CS.Shake=noop;CS.Start=noop
+                        Adv._antiShakeDone=true
+                    end
+                end
+            end
+        end)
+    end
+
+    function Adv.bodyClip()
+        local c=lp.Character
+        if not c then return end
+        local h=c:FindFirstChild("HumanoidRootPart")
+        if not h then return end
+        if Adv._bodyClip and Adv._bodyClip.Parent then return end
+        Adv._bodyClip=Instance.new("BodyVelocity")
+        Adv._bodyClip.Name="DeniaClip"
+        Adv._bodyClip.MaxForce=Vector3.new(math.huge,math.huge,math.huge)
+        Adv._bodyClip.Velocity=Vector3.new(0,0,0)
+        Adv._bodyClip.Parent=h
+    end
+
+    function Adv.removeClip()
+        if Adv._bodyClip then pcall(function()Adv._bodyClip:Destroy()end)Adv._bodyClip=nil end
+    end
+
+    Adv._autoStatConn = nil
+    Adv._autoStatEnabled = false
+    Adv._autoStatMode = "Melee"
+    function Adv.enableAutoStat(mode)
+        if Adv._autoStatEnabled then return end
+        Adv._autoStatEnabled = true
+        Adv._autoStatMode = mode or "Melee"
+        Adv._autoStatConn = RunService.Heartbeat:Connect(function()
+            pcall(function()
+                local data = lp:FindFirstChild("Data")
+                if not data then return end
+                local points = data:FindFirstChild("Points")
+                if not points or points.Value <= 0 then return end
+                local statMap = {
+                    Melee = "Combat",
+                    Defense = "Defense",
+                    Sword = "Sword",
+                    Gun = "Gun",
+                    DevilFruit = "Demon Fruit",
+                }
+                local statName = statMap[Adv._autoStatMode]
+                if not statName then return end
+                local remote = ReplicatedStorage:FindFirstChild("Remotes")
+                if not remote then return end
+                local commF = remote:FindFirstChild("CommF_")
+                if not commF then return end
+                commF:InvokeServer("AddPoint", statName, points.Value)
+            end)
+        end)
+    end
+
+    function Adv.disableAutoStat()
+        Adv._autoStatEnabled = false
+        if Adv._autoStatConn then Adv._autoStatConn:Disconnect() Adv._autoStatConn = nil end
+    end
+
+    Adv._fruitESPEnabled = false
+    Adv._fruitESPObjs = {}
+    Adv._fruitESPConn = nil
+    function Adv.enableFruitESP(color)
+        if Adv._fruitESPEnabled then Adv.disableFruitESP() end
+        Adv._fruitESPEnabled = true
+        color = color or Color3.fromRGB(255, 215, 0)
+        Adv._fruitESPConn = RunService.RenderStepped:Connect(function()
+            pcall(function()
+                for _, o in ipairs(Workspace:GetDescendants()) do
+                    if o:IsA("Tool") and o:FindFirstChild("Handle") then
+                        local fruitName = o.Name
+                        local isFruit = fruitName:find("Fruit") or fruitName:find("fruit") or
+                            fruitName:find("Apple") or fruitName:find("Banana") or
+                            fruitName:find("Cherry") or fruitName:find("Diamond") or
+                            fruitName:find("Dough") or fruitName:find("Dragon") or
+                            fruitName:find("Flame") or fruitName:find("Gravity") or
+                            fruitName:find("Ice") or fruitName:find("Light") or
+                            fruitName:find("Love") or fruitName:find("Magma") or
+                            fruitName:find("Pain") or fruitName:find("Phoenix") or
+                            fruitName:find("Quake") or fruitName:find("Rumble") or
+                            fruitName:find("Sand") or fruitName:find("Shadow") or
+                            fruitName:find("Smoke") or fruitName:find("Snow") or
+                            fruitName:find("Spider") or fruitName:find("Spirit") or
+                            fruitName:find("Spring") or fruitName:find("Venom") or
+                            fruitName:find("Dark") or fruitName:find("Bomb") or
+                            fruitName:find("Barrier") or fruitName:find("Blizzard") or
+                            fruitName:find("Buddha") or fruitName:find("Control") or
+                            fruitName:find("Door") or fruitName:find("Falcon") or
+                            fruitName:find("Ghost") or fruitName:find("Gum") or
+                            fruitName:find("Human") or fruitName:find("Kilo") or
+                            fruitName:find("Leopard") or fruitName:find("Magnet") or
+                            fruitName:find("Revive") or fruitName:find("Rubber") or
+                            fruitName:find("Spike") or fruitName:find("String")
+                        if isFruit and not Adv._fruitESPObjs[o] then
+                            local bg = Instance.new("BillboardGui")
+                            bg.Name = "DeniaFruitESP"
+                            bg.Adornee = o.Handle
+                            bg.Size = UDim2.new(6, 0, 3, 0)
+                            bg.AlwaysOnTop = true
+                            bg.Enabled = true
+                            local tl = Instance.new("TextLabel")
+                            tl.Size = UDim2.new(1, 0, 1, 0)
+                            tl.BackgroundTransparency = 1
+                            tl.TextColor3 = color
+                            tl.TextStrokeTransparency = 0.2
+                            tl.Text = "[?] "..fruitName.." ??"
+                            tl.Font = Enum.Font.GothamBold
+                            tl.TextSize = 16
+                            tl.Parent = bg
+                            bg.Parent = lp:FindFirstChild("PlayerGui")
+
+                            local box = Instance.new("BoxHandleAdornment")
+                            box.Name = "DeniaFruitBox"
+                            box.Adornee = o.Handle
+                            box.Size = o.Handle.Size * 2
+                            box.Color3 = color
+                            box.Transparency = 0.4
+                            box.Visible = true
+                            box.AlwaysOnTop = true
+                            box.ZIndex = 10
+                            box.Parent = o.Handle
+
+                            Adv._fruitESPObjs[o] = { bg = bg, box = box }
+                        end
+                    end
+                end
+                for obj, data in pairs(Adv._fruitESPObjs) do
+                    if not obj or not obj.Parent then
+                        pcall(function() data.bg:Destroy() end)
+                        pcall(function() data.box:Destroy() end)
+                        Adv._fruitESPObjs[obj] = nil
+                    end
+                end
+            end)
+        end)
+    end
+
+    function Adv.disableFruitESP()
+        Adv._fruitESPEnabled = false
+        if Adv._fruitESPConn then Adv._fruitESPConn:Disconnect() Adv._fruitESPConn = nil end
+        for _, data in pairs(Adv._fruitESPObjs) do
+            pcall(function() data.bg:Destroy() end)
+            pcall(function() data.box:Destroy() end)
+        end
+        Adv._fruitESPObjs = {}
+    end
+    function Adv.enableESP(color)
+        if Adv._espEnabled then Adv.disableESP()end
+        Adv._espEnabled=true;color=color or Color3.fromRGB(76,175,100)
+        Adv._espConn=RunService.RenderStepped:Connect(function()
+            pcall(function()
+                for _,p in ipairs(Players:GetPlayers())do
+                    if p~=lp and p.Character then
+                        local h=p.Character:FindFirstChild("HumanoidRootPart")
+                        local hum=p.Character:FindFirstChild("Humanoid")
+                        if h and hum and hum.Health>0 then
+                            if not Adv._espObjs[p]then
+                                local bg=Instance.new("BillboardGui")
+                                bg.Name="DeniaESP";bg.Adornee=h;bg.Size=UDim2.new(8,0,3,0)
+                                bg.AlwaysOnTop=true;bg.Enabled=true
+                                local tl=Instance.new("TextLabel")
+                                tl.Size=UDim2.new(1,0,1,0);tl.BackgroundTransparency=1
+                                tl.TextColor3=color;tl.TextStrokeTransparency=0.3
+                                tl.Text=(p.Name.." | "..tostring(math.floor(hum.Health)).."HP")
+                                tl.Font=Enum.Font.GothamBold;tl.TextSize=14;tl.Parent=bg
+                                bg.Parent=lp:FindFirstChild("PlayerGui")
+                                Adv._espObjs[p]=bg
+
+                                local box=Instance.new("BoxHandleAdornment")
+                                box.Name="DeniaESPBox";box.Adornee=h;box.Size=h.Size*1.5
+                                box.Color3=color;box.Transparency=0.5;box.Visible=true
+                                box.AlwaysOnTop=true;box.ZIndex=10;box.Parent=h
+                                Adv._espObjs[p.."_box"]=box
+                            else
+                                local tl=Adv._espObjs[p]:FindFirstChild("TextLabel")
+                                if tl then tl.Text=(p.Name.." | "..tostring(math.floor(hum.Health)).."HP")end
+                            end
+                        end
+                    end
+                end
+                for p,obj in pairs(Adv._espObjs)do
+                    if type(p)=="string"then goto skip end
+                    local char=p.Character
+                    if not char or not char:FindFirstChild("HumanoidRootPart")or not char:FindFirstChild("Humanoid")or char.Humanoid.Health<=0 then
+                        pcall(function()obj:Destroy()end)
+                        if Adv._espObjs[p.."_box"]then pcall(function()Adv._espObjs[p.."_box"]:Destroy()end)end
+                        Adv._espObjs[p]=nil;Adv._espObjs[p.."_box"]=nil
+                    end
+                    ::skip::
+                end
+            end)
+        end)
+    end
+
+    function Adv.disableESP()
+        Adv._espEnabled=false
+        if Adv._espConn then Adv._espConn:Disconnect()Adv._espConn=nil end
+        for k,v in pairs(Adv._espObjs)do pcall(function()v:Destroy()end)end
+        Adv._espObjs={}
+    end
+
+    function Adv.enableFastAttack()
+        if Adv._fastAtkEnabled then return end
+        Adv._fastAtkEnabled=true
+        Adv.setupCombatFramework()
+        Adv._fastAtkConn=RunService.Heartbeat:Connect(function()
+            pcall(function()
+                if Adv._killAuraEnabled then return end
+                Adv.fastAttack()
+                Adv.bodyClip()
+            end)
+        end)
+    end
+
+    function Adv.disableFastAttack()
+        Adv._fastAtkEnabled=false
+        if Adv._fastAtkConn then Adv._fastAtkConn:Disconnect()Adv._fastAtkConn=nil end
+        Adv.removeClip()
+    end
+
+    function Adv.enableKillAura()
+        if Adv._killAuraEnabled then return end
+        Adv._killAuraEnabled=true
+        Adv._killAuraConn=RunService.Heartbeat:Connect(function()
+            pcall(function()
+                for _,p in ipairs(Players:GetPlayers())do
+                    if p~=lp and p.Character then
+                        local h=p.Character:FindFirstChild("Humanoid")
+                        local hr=p.Character:FindFirstChild("HumanoidRootPart")
+                        if h and hr and h.Health>0 and (lp.Character and lp.Character:FindFirstChild("HumanoidRootPart"))then
+                            local d=(hr.Position-lp.Character.HumanoidRootPart.Position).Magnitude
+                            if d<50 then h.Health=0;hr.CFrame=lp.Character.HumanoidRootPart.CFrame end
+                        end
+                    end
+                end
+            end)
+        end)
+    end
+
+    function Adv.disableKillAura()
+        Adv._killAuraEnabled=false
+        if Adv._killAuraConn then Adv._killAuraConn:Disconnect()Adv._killAuraConn=nil end
+    end
+
+    function Adv.enableAutoQuest()
+        if Adv._autoFarmConn then return end
+        local remotes=ReplicatedStorage:FindFirstChild("Remotes")
+        if not remotes then return end
+        local commF=remotes:FindFirstChild("CommF_")
+        if not commF then return end
+        Adv._autoFarmConn=RunService.Heartbeat:Connect(function()
+            pcall(function()
+                local lvl=lp:FindFirstChild("Data")and lp.Data:FindFirstChild("Level")
+                if not lvl then return end
+                local level=lvl.Value;local quest=Adv.getQuestForLevel(level)
+                if not quest then return end
+                local pg=lp:FindFirstChild("PlayerGui")
+                local hasQuest=false
+                if pg then
+                    local mg=pg:FindFirstChild("Main")
+                    if mg then
+                        local qf=mg:FindFirstChild("QuestFrame")
+                        if qf and qf.Visible then hasQuest=true end
+                    end
+                end
+                if not hasQuest then
+                    local hrp=lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        local dist=(quest.npcCF.Position-hrp.Position).Magnitude
+                        if dist>50 then hrp.CFrame=quest.npcCF end
+                        commF:InvokeServer(unpack(quest.a))
+                        task.wait(0.5)
+                    end
+                    return
+                end
+                local mob=Adv.findMob(quest.mob)
+                if mob then
+                    local hrp=lp.Character and lp.Character:FindFirstChild("HumanoidRootPart")
+                    if not hrp then return end
+                    local mhrp=mob:FindFirstChild("HumanoidRootPart")
+                    if mhrp then
+                        local dist=(mhrp.Position-hrp.Position).Magnitude
+                        if dist>200 then hrp.CFrame=CFrame.new(mhrp.Position+Vector3.new(math.random(-20,20),0,math.random(-20,20)))
+                        else Adv.fastAttack();Adv.bodyClip()
+                            hrp.CFrame=CFrame.new(mhrp.Position*Vector3.new(1,0,1)+(hrp.Position-hrp.Position).Unit*8+Vector3.new(0,10,0))
+                        end
+                    end
+                end
+            end)
+        end)
+    end
+
+    function Adv.disableAutoQuest()
+        if Adv._autoFarmConn then Adv._autoFarmConn:Disconnect()Adv._autoFarmConn=nil end
+    end
+
+    function Adv.findMob(name)
+        if not name then return nil end
+        local nl=name:lower()
+        for _,o in ipairs(Workspace:GetDescendants())do
+            if o:IsA("Model")and o:FindFirstChild("Humanoid")and o:FindFirstChild("HumanoidRootPart")and o.Humanoid.Health>0 then
+                if o.Name:lower():find(nl,1,true)then return o end
+            end
+        end
+        return nil
+    end
+
+    function Adv.start()
+        Adv.setupCombatFramework()
+        Adv.setupSimRadius()
+        Adv.noShake()
+        Adv.setupNamecall()
+    end
+
+    Adv._seaProgConn = nil
+    Adv._seaProgEnabled = false
+    local SeaThresholds = {
+        {from=1,to=2,level=700,entrance=Vector3.new(61163.85,11.68,1819.78)},
+        {from=2,to=3,level=1500,entrance=Vector3.new(-6508.56,5000.03,-132.84)},
+    }
+    function Adv.enableAutoSea()
+        if Adv._seaProgEnabled then return end
+        Adv._seaProgEnabled = true
+        Adv._seaProgConn = RunService.Heartbeat:Connect(function()
+            pcall(function()
+                local data = lp:FindFirstChild("Data")
+                if not data then return end
+                local lvl = data:FindFirstChild("Level")
+                if not lvl then return end
+                local level = lvl.Value
+                local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+                if not remotes then return end
+                local commF = remotes:FindFirstChild("CommF_")
+                if not commF then return end
+                for _, st in ipairs(SeaThresholds) do
+                    if CurrentSea == st.from and level >= st.level then
+                        commF:InvokeServer("requestEntrance", st.entrance)
+                        task.wait(2)
+                    end
+                end
+            end)
+        end)
+    end
+
+    function Adv.disableAutoSea()
+        Adv._seaProgEnabled = false
+        if Adv._seaProgConn then Adv._seaProgConn:Disconnect() Adv._seaProgConn = nil end
+    end
+
+    Adv._noclipConn = nil
+    Adv._noclipEnabled = false
+    function Adv.enableNoclip()
+        if Adv._noclipEnabled then return end
+        Adv._noclipEnabled = true
+        Adv._noclipConn = RunService.Stepped:Connect(function()
+            pcall(function()
+                local c = lp.Character
+                if not c then return end
+                local h = c:FindFirstChild("Humanoid")
+                if not h then return end
+                h:ChangeState(11)
+                for _, part in ipairs(c:GetDescendants()) do
+                    if part:IsA("BasePart") and part.CanCollide then
+                        part.CanCollide = false
+                    end
+                end
+            end)
+        end)
+    end
+
+    function Adv.disableNoclip()
+        Adv._noclipEnabled = false
+        if Adv._noclipConn then Adv._noclipConn:Disconnect() Adv._noclipConn = nil end
+        pcall(function()
+            local c = lp.Character
+            if not c then return end
+            for _, part in ipairs(c:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = true
+                end
+            end
+        end)
+    end
+
+    Adv._bringMobConn = nil
+    Adv._bringMobEnabled = false
+    Adv._bringMobTarget = nil
+    function Adv.enableBringMob(targetMob)
+        if Adv._bringMobEnabled then Adv.disableBringMob() end
+        Adv._bringMobEnabled = true
+        Adv._bringMobTarget = targetMob
+        Adv._bringMobConn = RunService.Heartbeat:Connect(function()
+            pcall(function()
+                local c = lp.Character
+                if not c then return end
+                local hrp = c:FindFirstChild("HumanoidRootPart")
+                if not hrp then return end
+                local tMob = Adv._bringMobTarget
+                if not tMob then
+                    local quest = Adv.getQuestForLevel(lp.Data and lp.Data:FindFirstChild("Level") and lp.Data.Level.Value or 1)
+                    if quest then tMob = quest.mob end
+                end
+                if not tMob then return end
+                for _, o in ipairs(Workspace:GetDescendants()) do
+                    if o:IsA("Model") and o:FindFirstChild("Humanoid") and o:FindFirstChild("HumanoidRootPart") then
+                        local hum = o.Humanoid
+                        local mhrp = o.HumanoidRootPart
+                        if hum.Health > 0 and o.Name:lower():find(tMob:lower(), 1, true) then
+                            local dist = (mhrp.Position - hrp.Position).Magnitude
+                            if dist > 15 and dist < 400 then
+                                mhrp.CFrame = CFrame.new(hrp.Position + Vector3.new(math.random(-12,12), 3, math.random(-12,12)))
+                                if hum:FindFirstChild("Root") then
+                                    local root = hum.Root
+                                    root.Velocity = Vector3.new(0, 0, 0)
+                                end
+                            end
+                        end
+                    end
+                end
+            end)
+        end)
+    end
+
+    function Adv.disableBringMob()
+        Adv._bringMobEnabled = false
+        if Adv._bringMobConn then Adv._bringMobConn:Disconnect() Adv._bringMobConn = nil end
+    end
+
+    function Adv.stop()
+        Adv.disableESP()
+        Adv.disableFruitESP()
+        Adv.disableAutoStat()
+        Adv.disableAutoSea()
+        Adv.disableNoclip()
+        Adv.disableBringMob()
+        Adv.disableFastAttack()
+        Adv.disableKillAura()
+        Adv.disableAutoQuest()
+        Adv.removeClip()
+        if Adv._simConn then Adv._simConn:Disconnect()Adv._simConn=nil end
+        Adv._namecallHookActive=false
+    end
+
+    return Adv
 end
 _modules["boot"] = function()
     local Players = game:GetService("Players")
     local lp = Players.LocalPlayer
     local DeniaHub = {}
-    DeniaHub.VERSION = "1.0"
+    DeniaHub.VERSION = "3.0"
     DeniaHub.START_TIME = os.time()
     DeniaHub.Loaded = false
 
-    function DeniaHub.createTabs(UI, Config, Utils)
-        UI:CreateTab("Main", "rbxassetid://8568970646", 1)
-        UI:CreateTab("Combat", "rbxassetid://9048465907", 2)
-        UI:CreateTab("Farming", "rbxassetid://8567823911", 3)
-        UI:CreateTab("Misc", "rbxassetid://8568215835", 4)
-        UI:CreateTab("Stats", "rbxassetid://8569146720", 5)
+    function DeniaHub.createTabs(UI)
+        UI:CreateTab("Main","rbxassetid://8568970646",1)
+        UI:CreateTab("Combat","rbxassetid://9048465907",2)
+        UI:CreateTab("Farming","rbxassetid://8567823911",3)
+        UI:CreateTab("Adv","rbxassetid://8568215835",4)
+        UI:CreateTab("Stats","rbxassetid://8569146720",5)
     end
 
-    function DeniaHub.createMainTab(UI, Config, Utils, Main)
-        local tab = UI.Tabs[1]
-        local sec = UI:Section(tab, "Account", 1)
-        UI:Label(tab, sec, ("Player: " .. lp.Name), 1, UI.Library.Theme.AccentLight)
-        UI:Label(tab, sec, ("Bounty: " .. Utils.formatNumber(Utils.getCurrentBounty())), 2)
-        UI:Separator(tab, sec, 3)
-        UI:Button(tab, sec, "Reset Character", function() Main.resetCharacter() end, 4)
-        local sec2 = UI:Section(tab, "Targeting", 2)
-        UI:Dropdown(tab, sec2, "LOCK_METHOD", "Lock Method", Config.METHOD_LIST, Config.LOCK_METHOD, 1)
-        UI:Slider(tab, sec2, "TARGET_DISTANCE", "Target Range", 50, 400, Config.TARGET_DISTANCE, "m", 2)
-        UI:Dropdown(tab, sec2, "HOP_TYPE", "Hop Type", Config.HOP_TYPES, Config.HOP_TYPE, 3)
-        UI:Button(tab, sec2, "Server Hop", function() Main.serverHop() end, 4)
-        local sec3 = UI:Section(tab, "Whitelist", 3)
-        UI:Dropdown(tab, sec3, "WHITELIST_MODE", "Mode", Config.WL_MODES, Config.WHITELIST_MODE, 1)
-        UI:Label(tab, sec3, "Use DeniaHub/Data to edit buddy list", 2, UI.Library.Theme.TextDim)
-        local sec4 = UI:Section(tab, "Visuals", 4)
-        UI:Keybind(tab, sec4, "TOGGLE_KEY", "Toggle UI", UI.ToggleKey, 1)
-        UI:Label(tab, sec4, "Current key: Right Shift", 2, UI.Library.Theme.TextDim)
-        UI:SelectTab(tab)
+    function DeniaHub.createMainTab(UI,Config,Utils,Main)
+        local t=UI.Tabs[1]
+        local s1=UI:Section(t,"Account",1)
+        UI:Label(t,s1,"Player: "..lp.Name,1,UI.Library.Theme.AccentLight)
+        UI:Label(t,s1,"Bounty: "..Utils.formatNumber(Utils.getCurrentBounty()),2)
+        UI:Separator(t,s1,3)
+        UI:Button(t,s1,"Reset Character",function()Main.reset()end,4)
+        local s2=UI:Section(t,"Targeting",2)
+        UI:Dropdown(t,s2,"LOCK_METHOD","Lock Method",Config.METHOD_LIST,Config.LOCK_METHOD,1)
+        UI:Slider(t,s2,"TARGET_DISTANCE","Range",50,400,Config.TARGET_DISTANCE,"m",2)
+        UI:Dropdown(t,s2,"HOP_TYPE","Hop Type",Config.HOP_TYPES,Config.HOP_TYPE,3)
+        UI:Button(t,s2,"Server Hop",function()Main.serverHop()end,4)
+        local s3=UI:Section(t,"Whitelist",3)
+        UI:Dropdown(t,s3,"WHITELIST_MODE","Mode",Config.WL_MODES,Config.WHITELIST_MODE,1)
+        local s4=UI:Section(t,"Visuals",4)
+        UI:Keybind(t,s4,"TOGGLE_KEY","Toggle UI",UI.ToggleKey,1)
+        UI:Label(t,s4,"Key: RightShift | Mobile: toggle btn",2,UI.Library.Theme.TextDim)
+        UI:SelectTab(t)
     end
 
-    function DeniaHub.createCombatTab(UI, Config, Utils, Main)
-        local tab = UI.Tabs[2]
-        local sec = UI:Section(tab, "Bounty Hunt", 1)
-        UI:Toggle(tab, sec, "AUTO_FARM_BOUNTY", "Auto Farm Bounty", Config.AUTO_FARM_BOUNTY, 1)
-        UI:Toggle(tab, sec, "BOUNTY_HUNTER", "Bounty Hunter Mode", Config.BOUNTY_HUNTER, 2)
-        UI:Toggle(tab, sec, "TEAM_CHECK", "Team Check", Config.TEAM_CHECK, 3)
-        UI:Toggle(tab, sec, "SAFE_MODE", "Safe Mode", Config.SAFE_MODE, 4)
-        local sec2 = UI:Section(tab, "Weapons", 2)
-        UI:Dropdown(tab, sec2, "MELEE", "Melee", Config.MELEE_LIST, Config.MELEE, 1)
-        UI:Dropdown(tab, sec2, "SWORD", "Sword", Config.SWORD_LIST, Config.SWORD, 2)
-        UI:Dropdown(tab, sec2, "GUN", "Gun", Config.GUN_LIST, Config.GUN, 3)
-        local sec3 = UI:Section(tab, "Fruit", 3)
-        UI:Dropdown(tab, sec3, "FRUIT", "Selected Fruit", Config.FRUIT_LIST, Config.FRUIT, 1)
-        UI:Toggle(tab, sec3, "AUTO_STORE", "Auto Store Fruit", Config.AUTO_STORE, 2)
-        local sec4 = UI:Section(tab, "Defense", 4)
-        UI:Toggle(tab, sec4, "AUTO_GODMODE", "God Mode", Config.AUTO_GODMODE, 1)
-        UI:Toggle(tab, sec4, "AUTO_INVIS", "Invisibility", Config.AUTO_INVIS, 2)
-        UI:Toggle(tab, sec4, "AUTO_BUSO", "Auto Buso Haki", Config.AUTO_BUSO, 3)
-        UI:Toggle(tab, sec4, "AUTO_OBS", "Auto Observation", Config.AUTO_OBS, 4)
-        UI:SelectTab(tab)
+    function DeniaHub.createCombatTab(UI,Config,Utils,Main)
+        local t=UI.Tabs[2]
+        local s1=UI:Section(t,"Bounty Hunter",1)
+        UI:Toggle(t,s1,"AUTO_FARM_BOUNTY","Auto Farm Bounty",Config.AUTO_FARM_BOUNTY,1)
+        UI:Toggle(t,s1,"BOUNTY_HUNTER","Bounty Hunter Mode",Config.BOUNTY_HUNTER,2)
+        UI:Toggle(t,s1,"TEAM_CHECK","Team Check",Config.TEAM_CHECK,3)
+        local s2=UI:Section(t,"Weapons",2)
+        UI:Dropdown(t,s2,"MELEE","Melee",Config.MELEE_LIST,Config.MELEE,1)
+        UI:Dropdown(t,s2,"SWORD","Sword",Config.SWORD_LIST,Config.SWORD,2)
+        UI:Dropdown(t,s2,"GUN","Gun",Config.GUN_LIST,Config.GUN,3)
+        local s3=UI:Section(t,"Fruit",3)
+        UI:Dropdown(t,s3,"FRUIT","Fruit",Config.FRUIT_LIST,Config.FRUIT,1)
+        UI:Toggle(t,s3,"AUTO_STORE","Auto Store Fruit",Config.AUTO_STORE,2)
+        local s4=UI:Section(t,"Defense",4)
+        UI:Toggle(t,s4,"AUTO_GODMODE","God Mode",Config.AUTO_GODMODE,1)
+        UI:Toggle(t,s4,"AUTO_INVIS","Invisibility",Config.AUTO_INVIS,2)
+        UI:Toggle(t,s4,"AUTO_BUSO","Auto Buso",Config.AUTO_BUSO,3)
+        UI:Toggle(t,s4,"AUTO_OBS","Auto Observation",Config.AUTO_OBS,4)
+        UI:SelectTab(t)
     end
 
-    function DeniaHub.createFarmingTab(UI, Config, Utils, Main)
-        local tab = UI.Tabs[3]
-        local sec = UI:Section(tab, "Level Farming", 1)
-        UI:Toggle(tab, sec, "AUTO_FARM_LEVEL", "Auto Farm Level", Config.AUTO_FARM_LEVEL, 1)
-        UI:Toggle(tab, sec, "AUTO_FARM_MASTERY", "Auto Farm Mastery", Config.AUTO_FARM_MASTERY, 2)
-        UI:Toggle(tab, sec, "AUTO_ROLL", "Auto Roll Fruit", Config.AUTO_ROLL, 3)
-        local sec2 = UI:Section(tab, "Raid", 2)
-        UI:Toggle(tab, sec2, "AUTO_RAID", "Auto Raid", Config.AUTO_RAID, 1)
-        UI:Dropdown(tab, sec2, "SELECTED_RAID", "Raid Mode", Config.RAID_LIST, Config.SELECTED_RAID, 2)
-        UI:Toggle(tab, sec2, "AUTO_CHIP", "Auto Chip", Config.AUTO_CHIP, 3)
-        local sec3 = UI:Section(tab, "Mobs", 3)
-        UI:Toggle(tab, sec3, "BRING_MOBS", "Bring Mobs", Config.BRING_MOBS, 1)
-        UI:Dropdown(tab, sec3, "BRING_TP", "TP Mode", Config.BRING_TP_LIST, Config.BRING_TP, 2)
-        UI:Slider(tab, sec3, "BRING_RADIUS", "Bring Radius", 50, 400, Config.BRING_RADIUS, "m", 3)
-        UI:Dropdown(tab, sec3, "BRING_MODE", "Bring Mode", Config.BRING_MODE_LIST, Config.BRING_MODE, 4)
-        UI:Toggle(tab, sec3, "AUTO_ELITE", "Auto Elite", Config.AUTO_ELITE, 5)
-        UI:Toggle(tab, sec3, "AUTO_NPC", "Auto NPC", Config.AUTO_NPC, 6)
-        local sec4 = UI:Section(tab, "Events & Fish", 4)
-        UI:Toggle(tab, sec4, "SEA_EVENT", "Sea Event", Config.SEA_EVENT, 1)
-        UI:Dropdown(tab, sec4, "EVENT_TYPE", "Event Type", Config.EVENT_LIST, Config.EVENT_TYPE, 2)
-        UI:Toggle(tab, sec4, "AUTO_FISH", "Auto Fish", Config.AUTO_FISH, 3)
-        UI:Toggle(tab, sec4, "AUTO_CHEST", "Auto Chest", Config.AUTO_CHEST, 4)
-        UI:SelectTab(tab)
+    function DeniaHub.createFarmingTab(UI,Config,Utils,Main)
+        local t=UI.Tabs[3]
+        local s1=UI:Section(t,"Leveling",1)
+        UI:Toggle(t,s1,"AUTO_FARM_LEVEL","Auto Farm Level",Config.AUTO_FARM_LEVEL,1)
+        UI:Toggle(t,s1,"AUTO_FARM_MASTERY","Auto Farm Mastery",Config.AUTO_FARM_MASTERY,2)
+        UI:Toggle(t,s1,"AUTO_ROLL","Auto Roll Fruit",Config.AUTO_ROLL,3)
+        local s2=UI:Section(t,"Mobs",2)
+        UI:Toggle(t,s2,"BRING_MOBS","Bring Mobs",Config.BRING_MOBS,1)
+        UI:Dropdown(t,s2,"BRING_TP","TP",Config.BRING_TP_LIST,Config.BRING_TP,2)
+        UI:Slider(t,s2,"BRING_RADIUS","Radius",50,400,Config.BRING_RADIUS,"m",3)
+        UI:Toggle(t,s2,"AUTO_ELITE","Auto Elite",Config.AUTO_ELITE,4)
+        UI:Toggle(t,s2,"AUTO_NPC","Auto NPC",Config.AUTO_NPC,5)
+        UI:Toggle(t,s2,"AUTO_CHEST","Auto Chest",Config.AUTO_CHEST,6)
+        local s3=UI:Section(t,"Events",3)
+        UI:Toggle(t,s3,"SEA_EVENT","Sea Event",Config.SEA_EVENT,1)
+        UI:Dropdown(t,s3,"EVENT_TYPE","Type",Config.EVENT_LIST,Config.EVENT_TYPE,2)
+        UI:Toggle(t,s3,"AUTO_FISH","Auto Fish",Config.AUTO_FISH,3)
+        UI:SelectTab(t)
     end
 
-    function DeniaHub.createMiscTab(UI, Config, Utils, Main)
-        local tab = UI.Tabs[4]
-        local sec = UI:Section(tab, "Automation", 1)
-        UI:Toggle(tab, sec, "AUTO_HOP", "Auto Hop (4 kills)", Config.AUTO_HOP, 1)
-        UI:Toggle(tab, sec, "ANTI_BAN", "Anti Ban", Config.ANTI_BAN, 2)
-        UI:Toggle(tab, sec, "AUTO_AURA", "Auto Haki", Config.AUTO_AURA, 3)
-        UI:Toggle(tab, sec, "AUTO_HAKI", "Auto Observation", Config.AUTO_HAKI, 4)
-        local sec2 = UI:Section(tab, "Teleports", 2)
-        UI:Button(tab, sec2, "Teleport Sea 1", function()
-            pcall(function() Main.teleportToCFrame(CFrame.new(-786,28,-1286)) end) end, 1)
-        UI:Button(tab, sec2, "Teleport Sea 2", function()
-            pcall(function() Main.teleportToCFrame(CFrame.new(9572,26,1543)) end) end, 2)
-        UI:Button(tab, sec2, "Teleport Sea 3", function()
-            pcall(function() Main.teleportToCFrame(CFrame.new(32290,28,8899)) end) end, 3)
-        local sec3 = UI:Section(tab, "Save Data", 3)
-        UI:Button(tab, sec3, "Save Config", function()
-            if Config and Config.saveSettings then Config.saveSettings()
-                UI:CreateNotification("Saved","Config saved",2,"success") end end, 1)
-        UI:Button(tab, sec3, "Reset Stats", function()
-            if Utils then Utils.resetStats()
-                UI:CreateNotification("Reset","Stats cleared",2,"info") end end, 2)
-        UI:Button(tab, sec3, "Clear Key", function()
-            if Utils then Utils.clearKey()
-                UI:CreateNotification("Cleared","Key removed",2,"info") end end, 3)
-        local sec4 = UI:Section(tab, "Hub", 4)
-        UI:Button(tab, sec4, "Destroy UI", function()
-            if Main then Main.stop() end
-            if UI then UI:Cleanup() end
-            getgenv()._DeniaUI=nil; getgenv()._DeniaMain=nil
-            getgenv()._DeniaConfig=nil; getgenv()._DeniaUtils=nil; getgenv()._DeniaAuth=nil
-        end, 1)
-        UI:Label(tab, sec4, ("Uptime: "..Utils.formatTime(os.time()-DeniaHub.START_TIME)),2,UI.Library.Theme.AccentLight)
-        UI:SelectTab(tab)
+    function DeniaHub.createAdvTab(UI,Config,Utils,Main)
+        local t=UI.Tabs[4]
+        local Adv=getgenv()._DeniaAdv
+        local s1=UI:Section(t,"Combat System",1)
+        UI:Button(t,s1,"Init Combat Framework",function()if Adv then Adv.start()UI:CreateNotification("Combat","Framework active",1,"success")end end,1)
+        UI:Label(t,s1,"Hitbox: 200 | NoShake | SimRadius",2,UI.Library.Theme.TextDim)
+        local s2=UI:Section(t,"Auto Attack",2)
+        UI:Button(t,s2,"Start Fast Attack",function()if Adv then Adv.enableFastAttack()UI:CreateNotification("FastAtk","Enabled",1,"success")end end,1)
+        UI:Button(t,s2,"Stop Fast Attack",function()if Adv then Adv.disableFastAttack()UI:CreateNotification("FastAtk","Disabled",1,"info")end end,2)
+        UI:Label(t,s2,"Uses CombatFramework + anim speed",3,UI.Library.Theme.TextDim)
+        local s3=UI:Section(t,"Kill Aura",3)
+        UI:Button(t,s3,"Enable Kill Aura",function()if Adv then Adv.enableKillAura()UI:CreateNotification("KillAura","ON - kills within 50 studs",1,"success")end end,1)
+        UI:Button(t,s3,"Disable Kill Aura",function()if Adv then Adv.disableKillAura()UI:CreateNotification("KillAura","OFF",1,"info")end end,2)
+        local s4=UI:Section(t,"ESP",4)
+        UI:Button(t,s4,"Enable ESP (Green)",function()if Adv then Adv.enableESP()UI:CreateNotification("ESP","Player ESP enabled",1,"success")end end,1)
+        UI:Button(t,s4,"Disable ESP",function()if Adv then Adv.disableESP()UI:CreateNotification("ESP","Disabled",1,"info")end end,2)
+        local s5=UI:Section(t,"Fruit ESP",5)
+        UI:Button(t,s5,"Enable Fruit ESP (Gold)",function()if Adv then Adv.enableFruitESP()UI:CreateNotification("FruitESP","Fruit tracking active",1,"success")end end,1)
+        UI:Button(t,s5,"Disable Fruit ESP",function()if Adv then Adv.disableFruitESP()UI:CreateNotification("FruitESP","Disabled",1,"info")end end,2)
+        local s6=UI:Section(t,"Auto Quest Farm",6)
+        UI:Button(t,s6,"Start Quest Farm",function()if Adv then Adv.enableAutoQuest()UI:CreateNotification("Quest","Auto quest farming running",1,"success")end end,1)
+        UI:Button(t,s6,"Stop Quest Farm",function()if Adv then Adv.disableAutoQuest()UI:CreateNotification("Quest","Stopped",1,"info")end end,2)
+        UI:Label(t,s6,"Sea "..tostring(Adv and Adv.getSea()or 0).." | 3 seas supported",3,UI.Library.Theme.TextDim)
+        local s7=UI:Section(t,"Auto Stat",7)
+        UI:Dropdown(t,s7,"AUTO_STAT_MODE","Stat Mode",{"Melee","Defense","Sword","Gun","DevilFruit"},Config.AUTO_STAT_MODE or "Melee",1)
+        UI:Button(t,s7,"Start Auto Stat",function()if Adv then Adv.enableAutoStat(Config.AUTO_STAT_MODE or "Melee")UI:CreateNotification("AutoStat","ON - "..(Config.AUTO_STAT_MODE or "Melee"),1,"success")end end,2)
+        UI:Button(t,s7,"Stop Auto Stat",function()if Adv then Adv.disableAutoStat()UI:CreateNotification("AutoStat","OFF",1,"info")end end,3)
+        local s8=UI:Section(t,"Movement",8)
+        UI:Button(t,s8,"Enable Noclip",function()if Adv then Adv.enableNoclip()UI:CreateNotification("Noclip","Walk through walls",1,"success")end end,1)
+        UI:Button(t,s8,"Disable Noclip",function()if Adv then Adv.disableNoclip()UI:CreateNotification("Noclip","Disabled",1,"info")end end,2)
+        UI:Button(t,s8,"Enable Bring Mob",function()if Adv then Adv.enableBringMob()UI:CreateNotification("BringMob","Pulling mobs to you",1,"success")end end,3)
+        UI:Button(t,s8,"Disable Bring Mob",function()if Adv then Adv.disableBringMob()UI:CreateNotification("BringMob","OFF",1,"info")end end,4)
+        local s9=UI:Section(t,"Sea Progression",9)
+        UI:Button(t,s9,"Enable Auto Sea",function()if Adv then Adv.enableAutoSea()UI:CreateNotification("AutoSea","Auto teleport between seas",1,"success")end end,1)
+        UI:Button(t,s9,"Disable Auto Sea",function()if Adv then Adv.disableAutoSea()UI:CreateNotification("AutoSea","OFF",1,"info")end end,2)
+        UI:Label(t,s9,"Sea 1->2 at lv700, Sea 2->3 at lv1500",3,UI.Library.Theme.TextDim)
+        UI:SelectTab(t)
     end
 
-    function DeniaHub.createStatsTab(UI, Config, Utils, Main)
-        local tab = UI.Tabs[5]
-        local stats = Utils.loadStats()
-        local sec = UI:Section(tab, "Session Statistics", 1)
-        UI:Label(tab, sec, ("Total Bounty: "..Utils.formatNumber(stats.totalBountyGained or 0)),1,UI.Library.Theme.AccentLight)
-        UI:Label(tab, sec, ("Total Kills: "..(stats.totalKills or 0)),2)
-        UI:Label(tab, sec, ("Hopped: "..(stats.serversHopped or 0)),3)
-        UI:Label(tab, sec, ("Auto Hops: "..(stats.autoServersHopped or 0)),4)
-        UI:Label(tab, sec, ("Play Time: "..Utils.formatTime(stats.totalPlayTime or 0)),5)
-        UI:Separator(tab, sec, 6)
-        UI:Label(tab, sec, ("Session Bounty: "..Utils.formatNumber(stats.sessionBounty or 0)),7)
-        UI:Label(tab, sec, ("Session Kills: "..(stats.sessionKills or 0)),8)
-        UI:Label(tab, sec, ("Started: "..os.date("%c",stats.sessionStartTime or os.time())),9,UI.Library.Theme.TextDim)
-        UI:Button(tab, sec, "Refresh Stats", function()
-            tab.Container:ClearAllChildren(); tab.Sections = {}
-            DeniaHub.createStatsTab(UI,Config,Utils,Main)
-        end, 10)
-        UI:SelectTab(tab)
+    function DeniaHub.createStatsTab(UI,Config,Utils,Main)
+        local t=UI.Tabs[5]
+        local stats=Utils.loadStats()
+        local s1=UI:Section(t,"Session",1)
+        UI:Label(t,s1,"Bounty: "..Utils.formatNumber(stats.totalBountyGained or 0),1,UI.Library.Theme.AccentLight)
+        UI:Label(t,s1,"Kills: "..(stats.totalKills or 0),2)
+        UI:Label(t,s1,"Hopped: "..(stats.serversHopped or 0),3)
+        UI:Label(t,s1,"Auto Hops: "..(stats.autoServersHopped or 0),4)
+        UI:Label(t,s1,"Play Time: "..Utils.formatTime(stats.totalPlayTime or 0),5)
+        UI:Separator(t,s1,6)
+        UI:Label(t,s1,"Session Bounty: "..Utils.formatNumber(stats.sessionBounty or 0),7)
+        UI:Label(t,s1,"Session Kills: "..(stats.sessionKills or 0),8)
+        UI:Label(t,s1,"Started: "..os.date("%c",stats.sessionStartTime or os.time()),9,UI.Library.Theme.TextDim)
+        UI:Button(t,s1,"Refresh",function()t.Container:ClearAllChildren();t.Sections={};DeniaHub.createStatsTab(UI,Config,Utils,Main)end,10)
+        UI:SelectTab(t)
     end
 
     function DeniaHub.init()
-        local Utils = _modules["utils"]()
-        getgenv()._DeniaUtils = Utils
-        Utils.logDebug(Utils.DEBUG_LEVELS.INFO, "Boot", "Utils v"..DeniaHub.VERSION)
-        local Config = _modules["config"]()
-        getgenv()._DeniaConfig = Config
-        Config.init()
-        Utils.logDebug(Utils.DEBUG_LEVELS.INFO, "Boot", "Config loaded")
-        local Auth = _modules["auth"]()
-        getgenv()._DeniaAuth = Auth
-        local UI = _modules["ui"]()
-        getgenv()._DeniaUI = UI
+        local UI=_modules["ui"]();getgenv()._DeniaUI=UI
+        UI:CreateLoadingScreen()
+        UI:UpdateLoadingProgress("Loading utilities...",0.1)
+        local Utils=_modules["utils"]();getgenv()._DeniaUtils=Utils
+        Utils.logDebug(Utils.DEBUG_LEVELS.INFO,"Boot","Utils v"..DeniaHub.VERSION)
+        UI:UpdateLoadingProgress("Loading config...",0.2)
+        local Config=_modules["config"]();getgenv()._DeniaConfig=Config;Config.init()
+        UI:UpdateLoadingProgress("Loading auth...",0.3)
+        local Auth=_modules["auth"]();getgenv()._DeniaAuth=Auth
+        UI:UpdateLoadingProgress("Building interface...",0.4)
         UI:Init()
-        UI:CreateNotification("DeniaHub v"..DeniaHub.VERSION,"Welcome "..lp.Name.."!",3,"success")
-        local Main = _modules["main"]()
-        getgenv()._DeniaMain = Main
-        DeniaHub.createTabs(UI,Config,Utils)
+        UI:UpdateLoadingProgress("Loading combat systems...",0.5)
+        local Main=_modules["main"]();getgenv()._DeniaMain=Main
+        UI:UpdateLoadingProgress("Loading advanced systems...",0.6)
+        local Adv=_modules["advanced"]();getgenv()._DeniaAdv=Adv
+        UI:UpdateLoadingProgress("Creating tabs...",0.7)
+        DeniaHub.createTabs(UI)
         DeniaHub.createMainTab(UI,Config,Utils,Main)
         DeniaHub.createCombatTab(UI,Config,Utils,Main)
         DeniaHub.createFarmingTab(UI,Config,Utils,Main)
-        DeniaHub.createMiscTab(UI,Config,Utils,Main)
+        DeniaHub.createAdvTab(UI,Config,Utils,Main)
         DeniaHub.createStatsTab(UI,Config,Utils,Main)
+        UI:UpdateLoadingProgress("Initializing...",0.9)
         Main.init()
-        DeniaHub.Loaded = true
-        Utils.logDebug(Utils.DEBUG_LEVELS.INFO,"Boot","DeniaHub v"..DeniaHub.VERSION.." ready")
-        if lp.Character then task.wait(0.5); UI:CreateNotification("Ready","All systems operational",2,"success") end
-        lp.CharacterAdded:Connect(function()
-            task.wait(1)
-            if UI and UI.CreateNotification then UI:CreateNotification("Respawned","Character detected",2,"info") end
-        end)
+        DeniaHub.Loaded=true
+        Utils.logDebug(Utils.DEBUG_LEVELS.INFO,"Boot","DeniaHub v"..DeniaHub.VERSION.." loaded")
+        UI:UpdateLoadingProgress("Ready!",1.0)
+        task.wait(0.3)
+        UI:HideLoadingScreen()
+        UI:CreateNotification("DeniaHub v"..DeniaHub.VERSION,"Welcome "..lp.Name.."!",3,"success")
+        if lp.Character then task.wait(0.5);UI:CreateNotification("Ready","v3.0 - Systems active",2,"success")end
+        lp.CharacterAdded:Connect(function()task.wait(1)if UI and UI.CreateNotification then UI:CreateNotification("Respawned","Character detected",2,"info")end end)
     end
 
     DeniaHub.init()
     return DeniaHub
 end
 
-local ok, mod = pcall(function() return _modules["boot"]() end)
-getgenv().DeniaHub = ok and mod or nil
-if ok then print("DeniaHub v1.0 - Loaded") else warn("DeniaHub failed:", mod) end
+local ok,mod=pcall(function()return _modules["boot"]()end)
+getgenv().DeniaHub=ok and mod or nil
+if ok then print("DeniaHub v3.0 - Loaded") else warn("DeniaHub v3.0 failed:",mod) end
