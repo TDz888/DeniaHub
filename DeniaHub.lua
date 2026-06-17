@@ -3,7 +3,7 @@
 -- Lua 5.1 compatible | No goto, no continue, no Font.fromId
 
 -- ==================== LOADER ====================
-local DeniaLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/YOUR_USER/YOUR_REPO/main/DeniaLib.lua"))()
+local DeniaLib = loadstring(game:HttpGet("https://raw.githubusercontent.com/TDz888/DeniaHub/refs/heads/main/DeniaLib.lua"))()
 
 -- ==================== SERVICES ====================
 local Players = game:GetService("Players")
